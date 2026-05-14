@@ -2,15 +2,19 @@
 
 This repository contains a collection of scripts and guides to enable MAP-E support to [OpenBSD](https://www.openbsd.org/).
 
-## Status
+## Official Status in OpenBSD 7.8 or earlier
 
-OpenBSD doesn't support MAP-E out of the box at this point. A [packet filter patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has been made publicly available since 2021.
+OpenBSD doesn't support MAP-E out of the box at this point.
 
-## Why
+## What works right now?
 
-OpenBSD makes a great SOHO router without installing additional packages.
+A [packet filter patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has been made publicly available since 2021. Applying the patch allows enables the port-mapping. Once the system's packet filter has been patched, use the perl scripts to bring up a `gif0` interface.
 
-# MAP-E
+## Step by Step Howto
+
+todo
+
+# About MAP-E
 
 ## Introduction to MAP-E
 
