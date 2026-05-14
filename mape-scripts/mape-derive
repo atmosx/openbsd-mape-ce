@@ -1,0 +1,129 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Socket qw(AF_INET AF_INET6 inet_pton inet_ntop);
+use Math::BigInt;
+
+sub diex { die "mape-derive: @_\n"; }
+
+sub pow2 {
+	my ($bits) = @_;
+	return Math::BigInt->bone()->blsft($bits);
+}
+
+sub bytes_to_int {
+	my ($bytes) = @_;
+	my $n = Math::BigInt->new(0);
+	for my $b (unpack("C*", $bytes)) {
+		$n->blsft(8);
+		$n->badd($b);
+	}
+	return $n;
+}
+
+sub int_to_ipv6 {
+	my ($n) = @_;
+	my @b;
+	my $x = $n->copy();
+	for (1..16) {
+		unshift @b, $x->copy()->band(255)->numify();
+		$x->brsft(8);
+	}
+	return inet_ntop(AF_INET6, pack("C*", @b));
+}
+
+sub ipv6_to_int {
+	my ($addr) = @_;
+	my $packed = inet_pton(AF_INET6, $addr) or diex("invalid IPv6 address: $addr");
+	return bytes_to_int($packed);
+}
+
+sub ipv4_to_int {
+	my ($addr) = @_;
+	my $packed = inet_pton(AF_INET, $addr) or diex("invalid IPv4 address: $addr");
+	return unpack("N", $packed);
+}
+
+sub int_to_ipv4 {
+	my ($n) = @_;
+	return inet_ntop(AF_INET, pack("N", $n));
+}
+
+sub mask_bits {
+	my ($bits, $width) = @_;
+	return Math::BigInt->new(0) if $bits == 0;
+	return (pow2($width)->bsub(1))->bxor(pow2($width - $bits)->bsub(1));
+}
+
+sub network_int {
+	my ($n, $plen, $width) = @_;
+	return $n->copy()->band(mask_bits($plen, $width));
+}
+
+sub find_pd_prefix {
+	return $ENV{PD_PREFIX} if $ENV{PD_PREFIX};
+
+	if ($ENV{LEASE_FILE} && -r $ENV{LEASE_FILE}) {
+		open my $fh, "<", $ENV{LEASE_FILE} or diex("cannot read $ENV{LEASE_FILE}: $!");
+		while (my $line = <$fh>) {
+			if ($line =~ /([0-9a-fA-F:]+)\/(\d{1,3})/) {
+				return "$1/$2";
+			}
+		}
+	}
+
+	if ($ENV{PD_IF}) {
+		open my $fh, "-|", "ifconfig", $ENV{PD_IF} or diex("cannot run ifconfig $ENV{PD_IF}: $!");
+		while (my $line = <$fh>) {
+			if ($line =~ /\binet6\s+([0-9a-fA-F:]+)\s+prefixlen\s+(\d+)/) {
+				my ($addr, $plen) = ($1, $2);
+				next if $addr =~ /^fe80:/i;
+				next if $addr =~ /^fd/i;
+				return "$addr/$plen";
+			}
+		}
+	}
+
+	diex("could not find delegated prefix; set PD_PREFIX=.../... in /etc/mape.conf for testing");
+}
+
+my $pd = find_pd_prefix();
+my ($pd_addr, $pd_plen) = $pd =~ /^([^\/]+)\/(\d+)$/ or diex("bad PD prefix: $pd");
+
+my $map6_prefix = $ENV{MAP_IPV6_PREFIX} // diex("MAP_IPV6_PREFIX missing");
+my $map6_plen   = $ENV{MAP_IPV6_PLEN}   // diex("MAP_IPV6_PLEN missing");
+my $map4_prefix = $ENV{MAP_IPV4_PREFIX} // diex("MAP_IPV4_PREFIX missing");
+my $map4_plen   = $ENV{MAP_IPV4_PLEN}   // diex("MAP_IPV4_PLEN missing");
+my $ea_len      = $ENV{EA_LEN}          // diex("EA_LEN missing");
+my $psid_offset = $ENV{PSID_OFFSET}     // diex("PSID_OFFSET missing");
+
+my $pd_int = network_int(ipv6_to_int($pd_addr), $pd_plen, 128);
+my $rule6_int = network_int(ipv6_to_int($map6_prefix), $map6_plen, 128);
+
+if ($pd_int->copy()->band(mask_bits($map6_plen, 128))->bcmp($rule6_int) != 0) {
+	diex("delegated prefix $pd is not inside MAP rule $map6_prefix/$map6_plen");
+}
+
+my $v4_suffix_len = 32 - $map4_plen;
+my $psid_len = $ea_len - $v4_suffix_len;
+diex("invalid MAP rule: EA_LEN too small") if $psid_len < 0;
+
+my $shift = 128 - $map6_plen - $ea_len;
+my $ea = $pd_int->copy()->brsft($shift)->band(pow2($ea_len)->bsub(1));
+
+my $v4_suffix = $ea->copy()->brsft($psid_len)->numify();
+my $psid = $ea->copy()->band(pow2($psid_len)->bsub(1))->numify();
+
+my $map4 = ipv4_to_int($map4_prefix) | $v4_suffix;
+my $map4_addr = int_to_ipv4($map4);
+
+my $prefix64 = network_int($pd_int, 64, 128);
+my $ce_int = $prefix64->copy()->bior(Math::BigInt->new($map4)->blsft(16))->bior($psid);
+my $ce_ipv6 = int_to_ipv6($ce_int);
+
+print "PD_PREFIX='$pd'\n";
+print "CE_IPV6='$ce_ipv6'\n";
+print "MAPE_IPV4='$map4_addr'\n";
+print "PSID_LEN='$psid_len'\n";
+print "PSID='$psid'\n";
+print "PSID_OFFSET='$psid_offset'\n";
