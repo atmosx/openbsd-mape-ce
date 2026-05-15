@@ -59,7 +59,9 @@ sub usage {
 }
 
 sub startup_message {
-	my $backend = $have_kqueue && $conf{LEASE_FILE} ? "kqueue on $conf{LEASE_FILE}" : "polling every ${interval}s";
+	my $backend = $have_kqueue && $conf{LEASE_FILE} ?
+	    "kqueue on $conf{LEASE_FILE}; health check every ${interval}s" :
+	    "polling every ${interval}s";
 	return "started; watching $conf with $backend";
 }
 
@@ -106,13 +108,18 @@ sub run_once {
 	}
 
 	my $old = read_state();
-	if (defined $old && $old eq $snapshot) {
-		log_debug("lease data unchanged");
+	my $runtime_reason = runtime_reconfigure_reason();
+	if (defined $old && $old eq $snapshot && !defined $runtime_reason) {
+		log_debug("lease data unchanged and MAP-E runtime looks healthy");
 		return;
 	}
 
-	log_info("MAP-E lease data changed; running $mape_up");
-	log_debug("new lease state:\n$snapshot");
+	if (!defined $old || $old ne $snapshot) {
+		log_info("MAP-E lease data changed; running $mape_up");
+		log_debug("new lease state:\n$snapshot");
+	} else {
+		log_info("MAP-E lease data unchanged but runtime needs repair: $runtime_reason");
+	}
 	my ($rc, $out) = run_command($mape_up, $conf);
 	if ($rc == 0) {
 		write_state($snapshot);
@@ -124,6 +131,21 @@ sub run_once {
 	my $exit = $rc == -1 ? "exec failed" : "exit " . ($rc >> 8);
 	log_warn("MAP-E reconfiguration failed: $exit");
 	log_warn("mape-up output:\n$out") if $out ne "";
+}
+
+sub runtime_reconfigure_reason {
+	my $gif = $conf{GIF_IF} || "";
+	return "GIF_IF is not configured" if $gif eq "";
+
+	my ($if_rc, $ifconfig) = run_command("ifconfig", $gif);
+	return "$gif does not exist" if $if_rc != 0;
+	return "$gif is not UP" if $ifconfig !~ /\bUP\b/;
+
+	my ($pf_rc, $rules) = run_command("pfctl", "-a", "mape", "-sr");
+	return "cannot read pf anchor mape" if $pf_rc != 0;
+	return "pf anchor mape has no MAP-E portset rule" if $rules !~ /\bmap-e-portset\b/;
+
+	return undef;
 }
 
 sub load_kqueue {
@@ -161,11 +183,22 @@ sub wait_for_kqueue_change {
 
 	my $flags = &EV_ADD | &EV_ENABLE | &EV_CLEAR;
 	my $notes = &NOTE_WRITE | &NOTE_DELETE | &NOTE_EXTEND | &NOTE_ATTRIB | &NOTE_RENAME | &NOTE_REVOKE;
+	my $timed_out = 0;
 	eval {
+		local $SIG{ALRM} = sub {
+			$timed_out = 1;
+			die "health check timeout\n";
+		};
 		$kq->EV_SET(fileno($fh), &EVFILT_VNODE, $flags, $notes, 0, 0);
+		alarm $interval;
 		$kq->kevent();
+		alarm 0;
 		1;
-	} or return 0;
+	} or do {
+		alarm 0;
+		return 1 if $timed_out;
+		return 0;
+	};
 
 	return 1;
 }
