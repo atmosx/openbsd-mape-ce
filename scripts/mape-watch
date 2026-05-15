@@ -113,15 +113,17 @@ sub run_once {
 
 	log_info("MAP-E lease data changed; running $mape_up");
 	log_debug("new lease state:\n$snapshot");
-	my $rc = system $mape_up, $conf;
+	my ($rc, $out) = run_command($mape_up, $conf);
 	if ($rc == 0) {
 		write_state($snapshot);
 		log_info("MAP-E reconfiguration complete");
+		log_debug("mape-up output:\n$out") if $out ne "";
 		return;
 	}
 
-	my $exit = $rc == -1 ? "exec failed: $!" : "exit " . ($rc >> 8);
+	my $exit = $rc == -1 ? "exec failed" : "exit " . ($rc >> 8);
 	log_warn("MAP-E reconfiguration failed: $exit");
+	log_warn("mape-up output:\n$out") if $out ne "";
 }
 
 sub load_kqueue {
@@ -257,6 +259,26 @@ sub read_cmd {
 	my $out = <$fh>;
 	close $fh;
 	return $out // "";
+}
+
+sub run_command {
+	my (@cmd) = @_;
+	my $pid = open my $fh, "-|";
+	if (!defined $pid) {
+		return (-1, "cannot fork: $!");
+	}
+	if ($pid == 0) {
+		open STDERR, ">&", STDOUT or exit 127;
+		exec @cmd or do {
+			print "cannot exec $cmd[0]: $!\n";
+			exit 127;
+		};
+	}
+
+	local $/;
+	my $out = <$fh> // "";
+	close $fh;
+	return ($?, $out);
 }
 
 sub read_state {

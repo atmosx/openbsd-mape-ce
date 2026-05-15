@@ -2,8 +2,9 @@
 #
 # OpenBSD rc.d script for mape-watch.
 
-daemon="/usr/local/sbin/mape-watch"
-daemon_flags="-d"
+daemon="/usr/bin/perl"
+daemon_flags="/usr/local/sbin/mape-watch -d"
+pexp="/usr/bin/perl /usr/local/sbin/mape-watch -d"
 
 . /etc/rc.d/rc.subr
 

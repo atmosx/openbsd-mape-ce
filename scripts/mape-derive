@@ -210,8 +210,10 @@ my $ea = $pd_int->copy()->brsft($shift)->band(pow2($ea_len)->bsub(1));
 my $v4_suffix = $ea->copy()->brsft($psid_len)->numify();
 my $psid = $ea->copy()->band(pow2($psid_len)->bsub(1))->numify();
 
-my $nat_psid_len = exists $lease{DHCP_PSID_LEN} ? $lease{DHCP_PSID_LEN} : $psid_len;
-my $nat_psid = exists $lease{DHCP_PSID} ? $lease{DHCP_PSID} : $psid;
+my $nat_psid_len = (exists $lease{DHCP_PSID_LEN} && $lease{DHCP_PSID_LEN} > 0) ?
+    $lease{DHCP_PSID_LEN} : $psid_len;
+my $nat_psid = (exists $lease{DHCP_PSID_LEN} && $lease{DHCP_PSID_LEN} > 0 &&
+    exists $lease{DHCP_PSID}) ? $lease{DHCP_PSID} : $psid;
 
 my $map4 = ipv4_to_int($map4_prefix) | $v4_suffix;
 my $map4_addr = int_to_ipv4($map4);

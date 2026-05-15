@@ -48,6 +48,7 @@ Enable the daemon at boot:
 ```sh
 doas rcctl enable mape_watch
 doas rcctl start mape_watch
+doas rcctl check mape_watch
 ```
 
 The watcher logs to syslog with `info`, `warn`, and `debug` levels. Set
