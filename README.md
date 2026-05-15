@@ -17,12 +17,9 @@ Install the non-metrics scripts:
 doas make install
 ```
 
-`mape-derive` prefers live OpenBSD 7.8 `dhcp6leased` MAP-E values from
-`/var/db/dhcp6leased/$LEASE_IF`: `ia_pd`, `mape_br`, `mape_rule`, and
-`mape_portparams`. If the lease file is not readable it falls back to
-`dhcp6leasectl -l "$LEASE_IF"`. Values not supplied by DHCP, such as
-`WAN_IF`, `GIF_IF`, `LAN_NET`, `GIF_MTU`, and `PF_ANCHOR_FILE`, still come from
-`/etc/mape.conf`.
+The script `mape-derive` extracts `dhcp6leased` MAP-E values from `/var/db/dhcp6leased/$LEASE_IF`: `ia_pd`, `mape_br`, `mape_rule`, and `mape_portparams`.
+
+If the lease file is not readable it falls back to `dhcp6leasectl -l "$LEASE_IF"`. Values not supplied by DHCP, such as `WAN_IF`, `GIF_IF`, `LAN_NET`, `GIF_MTU`, and `PF_ANCHOR_FILE`, still come from `/etc/mape.conf`.
 
 Bring MAP-E up manually:
 
