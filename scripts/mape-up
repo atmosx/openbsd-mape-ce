@@ -6,15 +6,20 @@ set -eu
 CONF="${1:-/etc/mape.conf}"
 . "$CONF"
 
-export PD_PREFIX PD_IF LEASE_FILE
-export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_OFFSET
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+DERIVE_COMMAND="${DERIVE_COMMAND:-/usr/local/sbin/mape-derive}"
+[ -x "$DERIVE_COMMAND" ] || DERIVE_COMMAND="$SCRIPT_DIR/mape-derive"
 
-eval "$(/usr/local/sbin/mape-derive)"
+export PD_PREFIX PD_IF LEASE_FILE LEASE_IF WAN_IF DHCP6LEASECTL
+export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_OFFSET BR_IPV6
+
+eval "$("$DERIVE_COMMAND")"
 
 echo "Derived MAP-E values:"
 echo "  PD_PREFIX=$PD_PREFIX"
 echo "  CE_IPV6=$CE_IPV6"
 echo "  MAPE_IPV4=$MAPE_IPV4"
+echo "  BR_IPV6=$BR_IPV6"
 echo "  PSID_OFFSET=$PSID_OFFSET"
 echo "  PSID_LEN=$PSID_LEN"
 echo "  PSID=$PSID"
@@ -39,8 +44,10 @@ ifconfig "$GIF_IF" mtu "$GIF_MTU"
 ifconfig "$GIF_IF" up
 
 mkdir -p "$(dirname "$PF_ANCHOR_FILE")"
+PF_ANCHOR_TMP="$(mktemp "$PF_ANCHOR_FILE.XXXXXXXXXX")"
+trap 'rm -f "$PF_ANCHOR_TMP"' EXIT
 
-cat > "$PF_ANCHOR_FILE" <<EOF
+cat > "$PF_ANCHOR_TMP" <<EOF
 match out on $GIF_IF inet from ($GIF_IF) to any nat-to ($GIF_IF) map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID
 match out on $GIF_IF inet from $LAN_NET to any nat-to ($GIF_IF) map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID
 
@@ -51,7 +58,10 @@ pass out quick on $GIF_IF inet from ($GIF_IF) to any keep state
 pass in  quick on $GIF_IF inet from any to ($GIF_IF) keep state
 EOF
 
-pfctl -a mape -f "$PF_ANCHOR_FILE"
+pfctl -a mape -nf "$PF_ANCHOR_TMP"
+pfctl -a mape -f "$PF_ANCHOR_TMP"
+mv "$PF_ANCHOR_TMP" "$PF_ANCHOR_FILE"
+trap - EXIT
 
 route delete -inet default >/dev/null 2>&1 || true
 route add -inet default -ifp "$GIF_IF" "$MAPE_PEER_IPV4"
