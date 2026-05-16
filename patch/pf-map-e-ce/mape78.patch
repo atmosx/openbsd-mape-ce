@@ -338,7 +338,7 @@ diff -u -p -u -p -b -r1.74 pf_lb.c
  pf_map_addr_sticky(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
      struct pf_addr *naddr, struct pf_src_node **sns, struct pf_pool *rpool,
      enum pf_sn_types type)
-@@ -726,14 +791,8 @@ pf_get_transaddr(struct pf_rule *r, stru
+@@ -700,20 +765,14 @@ pf_get_transaddr(struct pf_rule *r, stru
  		/* XXX is this right? what if rtable is changed at the same
  		 * XXX time? where do I need to figure out the sport? */
  		nport = 0;
@@ -351,6 +351,12 @@ diff -u -p -u -p -b -r1.74 pf_lb.c
 +		if (pf_get_sport(pd, r, &naddr, &nport, sns))
  			return (-1);
 -		}
+ 		/* decrease least-connection state counter of the previous */
+ 		if ((*nr) != NULL && (*nr)->nat.addr.type != PF_ADDR_NONE &&
+ 		    ((*nr)->nat.opts & PF_POOL_TYPEMASK) ==
+ 		    PF_POOL_LEASTSTATES)
+ 			pf_pool_states_decrease_addr(&(*nr)->nat, pd->af,
+ 			    &pd->nsaddr);
  		*nr = r;
  		pf_addrcpy(&pd->nsaddr, &naddr, pd->af);
  		pd->nsport = nport;
