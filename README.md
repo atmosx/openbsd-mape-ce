@@ -2,6 +2,8 @@
 
 This repository contains a collection of patches and scripts to add **Customer Edge Mapping of Address and Port with Encapsulation**, widely known as MAP-E CE ([RFC7597](https://datatracker.ietf.org/doc/html/rfc7597)), support to [OpenBSD](https://www.openbsd.org/) 7.8.
 
+[![builds.sr.ht status](https://builds.sr.ht/~atmosx/openbsd-mape-ce/commits/main/.build.yml.svg)](https://builds.sr.ht/~atmosx/openbsd-mape-ce/commits/main/.build.yml?)
+
 ## Status
 
 This is an experimental project. Do not rely on this implementation for production use.
