@@ -1,0 +1,44 @@
+image: openbsd/7.8
+sources:
+- https://git.sr.ht/~atmosx/openbsd-mape-ce
+environment:
+  OPENBSD_VERSION: "7.8"
+  OPENBSD_MIRROR: "https://cdn.openbsd.org/pub/OpenBSD/7.8"
+  OPENBSD_SRC: "openbsd-src"
+  REPO: "openbsd-mape-ce"
+tasks:
+- verify-image: |
+    set -eu
+    test "$(uname -s)" = "OpenBSD"
+    test "$(uname -r)" = "$OPENBSD_VERSION"
+- lint-maped: |
+    set -eu
+    cd "$REPO"
+    perl -c maped/maped
+    perl -c maped/maped-derive
+    sh -n maped/maped-up maped/maped-down
+    mandoc -Tlint maped/maped.8
+    make -n install
+- fetch-openbsd-src: |
+    set -eu
+    ftp -o /tmp/src.tar.gz "$OPENBSD_MIRROR/src.tar.gz"
+    ftp -o /tmp/sys.tar.gz "$OPENBSD_MIRROR/sys.tar.gz"
+    mkdir -p "$OPENBSD_SRC"
+    tar -C "$OPENBSD_SRC" -xzf /tmp/src.tar.gz
+    tar -C "$OPENBSD_SRC" -xzf /tmp/sys.tar.gz
+- check-patches: |
+    set -eu
+    repo="$PWD/$REPO"
+    cd "$OPENBSD_SRC"
+    patch -C -p0 < "$repo/patch/pf-map-e-ce/mape78.patch"
+    patch -C -p0 < "$repo/patch/dhcp6leased-mape-softwire46-openbsd78.patch"
+- apply-patches: |
+    set -eu
+    repo="$PWD/$REPO"
+    cd "$OPENBSD_SRC"
+    patch -p0 < "$repo/patch/pf-map-e-ce/mape78.patch"
+    patch -p0 < "$repo/patch/dhcp6leased-mape-softwire46-openbsd78.patch"
+- regress-dhcp6leased: |
+    set -eu
+    cd "$OPENBSD_SRC/regress/sbin/dhcp6leased"
+    make regress
