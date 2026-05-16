@@ -1,0 +1,2096 @@
+Index: regress/sbin/Makefile
+===================================================================
+RCS file: /cvs/src/regress/sbin/Makefile,v
+diff -u -p regress/sbin/Makefile
+--- regress/sbin/Makefile	Fri May 15 12:26:12 2026
++++ regress/sbin/Makefile	Fri May 15 12:26:13 2026
+@@ -1,6 +1,6 @@
+ #	$OpenBSD: Makefile,v 1.13 2020/12/27 17:27:50 bluhm Exp $
+ 
+-SUBDIR+= disklabel ifconfig iked isakmpd newfs route slaacd
++SUBDIR+= disklabel dhcp6leased ifconfig iked isakmpd newfs route slaacd
+ 
+ .if defined(REGRESS_FULL) || make(clean) || make(cleandir) || make(obj)
+ SUBDIR+= ipsecctl pfctl
+Index: regress/sbin/dhcp6leased/Makefile
+===================================================================
+--- /dev/null	Thu Jan  1 00:00:00 1970
++++ regress/sbin/dhcp6leased/Makefile	Fri May 15 12:26:13 2026
+@@ -0,0 +1,27 @@
++#	$OpenBSD$
++
++PROGS=	parse_lease_test fuzz_s46_test
++SRCS_parse_lease_test=	parse_lease_test.c parse_lease.c s46.c
++SRCS_fuzz_s46_test=	fuzz_s46_test.c s46.c
++
++.PATH: ${.CURDIR}/../../../sbin/dhcp6leased
++CFLAGS+= -I${.CURDIR}/../../../sbin/dhcp6leased
++CLEANFILES+= parse_lease.c
++
++REGRESS_TARGETS+=	run-regress-parse_lease_test
++REGRESS_TARGETS+=	run-regress-fuzz_s46_test
++REGRESS_TARGETS+=	run-regress-fuzz_s46_test-malloc
++
++parse_lease.c: ${.CURDIR}/../../../sbin/dhcp6leased/parse_lease.y
++	yacc -ppl -o ${.TARGET} ${.ALLSRC}
++
++run-regress-parse_lease_test: parse_lease_test
++	./parse_lease_test
++
++run-regress-fuzz_s46_test: fuzz_s46_test
++	./fuzz_s46_test
++
++run-regress-fuzz_s46_test-malloc: fuzz_s46_test
++	env MALLOC_OPTIONS=S ./${.ALLSRC}
++
++.include <bsd.regress.mk>
+Index: regress/sbin/dhcp6leased/parse_lease_test.c
+===================================================================
+--- /dev/null	Thu Jan  1 00:00:00 1970
++++ regress/sbin/dhcp6leased/parse_lease_test.c	Fri May 15 12:33:56 2026
+@@ -0,0 +1,735 @@
++/*	$OpenBSD$ */
++
++#include <sys/types.h>
++#include <sys/queue.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++
++#include <net/if.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++
++#include <err.h>
++#include <event.h>
++#include <imsg.h>
++#include <stdarg.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <syslog.h>
++#include <unistd.h>
++
++#include "log.h"
++#include "dhcp6leased.h"
++
++TAILQ_HEAD(files, file) files = TAILQ_HEAD_INITIALIZER(files);
++struct file	*file, *topfile;
++
++struct keywords {
++	const char	*k_name;
++	int		 k_val;
++};
++
++static void	 write_lease(char *, size_t, const char *);
++static void	 check_valid_mape(void);
++static void	 check_valid_mape_multiple_rules(void);
++static void	 check_incomplete_mape_lease(void);
++static void	 check_invalid_portparams(void);
++static void	 check_duplicate_mape_lease(void);
++static void	 check_portparams_without_rule(void);
++static void	 check_raw_s46_mape(void);
++static void	 check_raw_s46_mape_cosmote(void);
++static void	 check_raw_s46_mape_multiple_rules(void);
++static void	 check_reject_too_many_rules(void);
++static void	 check_reject_s46(const uint8_t *, size_t, const char *);
++static void	 check_in6(const char *, const struct in6_addr *);
++static void	 check_in(const char *, const struct in_addr *);
++static int	 igetc(void);
++
++static void
++write_lease(char *path, size_t pathlen, const char *lease)
++{
++	int fd;
++
++	strlcpy(path, "/tmp/parse_lease_test.XXXXXXXXXX", pathlen);
++	if ((fd = mkstemp(path)) == -1)
++		err(1, "mkstemp");
++	if (dprintf(fd, "%s", lease) == -1)
++		err(1, "dprintf");
++	if (close(fd) == -1)
++		err(1, "close");
++}
++
++static void
++check_in6(const char *want, const struct in6_addr *got)
++{
++	struct in6_addr in6;
++
++	if (inet_pton(AF_INET6, want, &in6) != 1)
++		errx(1, "bad test IPv6 address %s", want);
++	if (memcmp(&in6, got, sizeof(in6)) != 0)
++		errx(1, "IPv6 address mismatch for %s", want);
++}
++
++static void
++check_in(const char *want, const struct in_addr *got)
++{
++	struct in_addr in;
++
++	if (inet_pton(AF_INET, want, &in) != 1)
++		errx(1, "bad test IPv4 address %s", want);
++	if (memcmp(&in, got, sizeof(in)) != 0)
++		errx(1, "IPv4 address mismatch for %s", want);
++}
++
++static void
++check_valid_mape(void)
++{
++	struct imsg_ifinfo ifinfo;
++	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "ia_pd 0 2001:db8:100:: 56\n"
++	    "mape_br 2001:db8:ffff::1\n"
++	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
++	    "mape_portparams 6 8 42\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (ifinfo.pds[0].prefix_len != 56)
++		errx(1, "IA_PD prefix length mismatch");
++	check_in6("2001:db8:100::", &ifinfo.pds[0].prefix);
++
++	if (!ifinfo.mape.valid)
++		errx(1, "MAP-E state not marked valid");
++	if (!ifinfo.mape.br_valid)
++		errx(1, "MAP-E BR not marked valid");
++	check_in6("2001:db8:ffff::1", &ifinfo.mape.br);
++
++	if (ifinfo.mape.rule_count != 1)
++		errx(1, "MAP-E rule count mismatch");
++	if (!ifinfo.mape.rules[0].valid)
++		errx(1, "MAP-E rule not marked valid");
++	if (ifinfo.mape.rules[0].flags != 0)
++		errx(1, "MAP-E rule flags mismatch");
++	if (ifinfo.mape.rules[0].ea_len != 16)
++		errx(1, "MAP-E EA length mismatch");
++	if (ifinfo.mape.rules[0].prefix4_len != 24)
++		errx(1, "MAP-E IPv4 prefix length mismatch");
++	if (ifinfo.mape.rules[0].prefix6_len != 56)
++		errx(1, "MAP-E IPv6 prefix length mismatch");
++	check_in("192.0.2.0", &ifinfo.mape.rules[0].prefix4);
++	check_in6("2001:db8:100::", &ifinfo.mape.rules[0].prefix6);
++
++	if (!ifinfo.mape.rules[0].portparams.valid)
++		errx(1, "MAP-E port parameters not marked valid");
++	if (ifinfo.mape.rules[0].portparams.offset != 6)
++		errx(1, "MAP-E PSID offset mismatch");
++	if (ifinfo.mape.rules[0].portparams.psid_len != 8)
++		errx(1, "MAP-E PSID length mismatch");
++	if (ifinfo.mape.rules[0].portparams.psid != 42)
++		errx(1, "MAP-E PSID mismatch");
++}
++
++static void
++check_incomplete_mape_lease(void)
++{
++	struct imsg_ifinfo ifinfo;
++	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "mape_br 2001:db8:ffff::1\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (!ifinfo.mape.br_valid)
++		errx(1, "MAP-E BR-only lease lost BR");
++	if (ifinfo.mape.rule_count != 0)
++		errx(1, "MAP-E BR-only lease grew rules");
++	if (ifinfo.mape.valid)
++		errx(1, "MAP-E BR-only lease marked valid");
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
++	    "mape_portparams 6 8 42\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (ifinfo.mape.br_valid)
++		errx(1, "MAP-E rule-only lease grew BR");
++	if (ifinfo.mape.rule_count != 1 || !ifinfo.mape.rules[0].valid)
++		errx(1, "MAP-E rule-only lease lost rule");
++	if (!ifinfo.mape.rules[0].portparams.valid)
++		errx(1, "MAP-E rule-only lease lost portparams");
++	if (ifinfo.mape.valid)
++		errx(1, "MAP-E rule-only lease marked valid");
++}
++
++static void
++check_invalid_portparams(void)
++{
++	struct imsg_ifinfo ifinfo;
++	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "mape_br 2001:db8:ffff::1\n"
++	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
++	    "mape_portparams 6 8 256\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (!ifinfo.mape.valid || ifinfo.mape.rule_count != 1 ||
++	    !ifinfo.mape.rules[0].valid)
++		errx(1, "valid MAP-E state lost after bad portparams");
++	if (ifinfo.mape.rules[0].portparams.valid)
++		errx(1, "invalid MAP-E port parameters accepted");
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "mape_br 2001:db8:ffff::1\n"
++	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
++	    "mape_portparams 15 2 0\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (!ifinfo.mape.valid || ifinfo.mape.rule_count != 1 ||
++	    !ifinfo.mape.rules[0].valid)
++		errx(1, "valid MAP-E state lost after bad portparams span");
++	if (ifinfo.mape.rules[0].portparams.valid)
++		errx(1, "invalid MAP-E port parameters span accepted");
++}
++
++static void
++check_valid_mape_multiple_rules(void)
++{
++	struct imsg_ifinfo ifinfo;
++	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "mape_br 2001:db8:ffff::1\n"
++	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
++	    "mape_portparams 6 8 42\n"
++	    "mape_rule 128 16 198.51.100.0 24 2001:db8:200:: 56\n"
++	    "mape_portparams 4 6 17\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (!ifinfo.mape.valid || !ifinfo.mape.br_valid)
++		errx(1, "multiple-rule lease MAP-E state incomplete");
++	if (ifinfo.mape.rule_count != 2)
++		errx(1, "multiple-rule lease rule count mismatch");
++	check_in6("2001:db8:ffff::1", &ifinfo.mape.br);
++
++	if (!ifinfo.mape.rules[0].valid || !ifinfo.mape.rules[1].valid)
++		errx(1, "multiple-rule lease rule not marked valid");
++	check_in("192.0.2.0", &ifinfo.mape.rules[0].prefix4);
++	check_in6("2001:db8:100::", &ifinfo.mape.rules[0].prefix6);
++	check_in("198.51.100.0", &ifinfo.mape.rules[1].prefix4);
++	check_in6("2001:db8:200::", &ifinfo.mape.rules[1].prefix6);
++
++	if (!ifinfo.mape.rules[0].portparams.valid ||
++	    ifinfo.mape.rules[0].portparams.offset != 6 ||
++	    ifinfo.mape.rules[0].portparams.psid_len != 8 ||
++	    ifinfo.mape.rules[0].portparams.psid != 42)
++		errx(1, "multiple-rule lease port parameters mismatch");
++	if (!ifinfo.mape.rules[1].portparams.valid ||
++	    ifinfo.mape.rules[1].portparams.offset != 4 ||
++	    ifinfo.mape.rules[1].portparams.psid_len != 6 ||
++	    ifinfo.mape.rules[1].portparams.psid != 17)
++		errx(1, "second multiple-rule lease port parameters mismatch");
++}
++
++static void
++check_portparams_without_rule(void)
++{
++	struct imsg_ifinfo ifinfo;
++	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "mape_br 2001:db8:ffff::1\n"
++	    "mape_portparams 6 8 42\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (ifinfo.mape.rule_count != 0)
++		errx(1, "accepted MAP-E port parameters without rule");
++	if (ifinfo.mape.valid && ifinfo.mape.rules[0].portparams.valid)
++		errx(1, "stored MAP-E port parameters without rule");
++}
++
++static void
++check_duplicate_mape_lease(void)
++{
++	struct imsg_ifinfo ifinfo;
++	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "mape_br 2001:db8:ffff::1\n"
++	    "mape_br 2001:db8:ffff::2\n"
++	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (!ifinfo.mape.br_valid)
++		errx(1, "MAP-E BR lost after duplicate BR");
++	check_in6("2001:db8:ffff::1", &ifinfo.mape.br);
++
++	memset(&ifinfo, 0, sizeof(ifinfo));
++	write_lease(path, sizeof(path),
++	    "mape_br 2001:db8:ffff::1\n"
++	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
++	    "mape_portparams 6 8 42\n"
++	    "mape_portparams 4 6 17\n");
++
++	parse_lease(path, &ifinfo);
++	unlink(path);
++
++	if (!ifinfo.mape.rules[0].portparams.valid ||
++	    ifinfo.mape.rules[0].portparams.offset != 6 ||
++	    ifinfo.mape.rules[0].portparams.psid_len != 8 ||
++	    ifinfo.mape.rules[0].portparams.psid != 42)
++		errx(1, "duplicate MAP-E port parameters overwrote first set");
++}
++
++static void
++check_raw_s46_mape(void)
++{
++	static const uint8_t s46_mape[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x17,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
++	};
++	static const uint8_t bad_br[] = {
++	    0x00, 0x5a, 0x00, 0x0f,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	};
++	static const uint8_t bad_rule[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x07,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b,
++	};
++	static const uint8_t bad_portparams[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x16,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x03, 0x06, 0x08, 0x2a,
++	};
++	static const uint8_t bad_portparams_span[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x17,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x0f, 0x02, 0x00, 0x00,
++	};
++	static const uint8_t duplicate_br[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
++	};
++	static const uint8_t duplicate_portparams[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x1f,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x04, 0x06, 0x44, 0x00,
++	};
++	static const uint8_t unknown_subopt[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x17,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
++	    0x00, 0x42, 0x00, 0x02, 0xde, 0xad,
++	};
++	static const uint8_t unknown_rule_subopt[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x15,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x42, 0x00, 0x02, 0xbe, 0xef,
++	};
++	struct s46_mape mape;
++
++	memset(&mape, 0, sizeof(mape));
++	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
++	    &mape) != 0)
++		errx(1, "valid raw S46 MAP-E option rejected");
++	if (!mape.valid || !mape.br_valid || !mape.rules[0].valid)
++		errx(1, "valid raw S46 MAP-E state incomplete");
++	if (mape.rule_count != 1)
++		errx(1, "raw S46 MAP-E rule count mismatch");
++	check_in6("2001:db8:ffff::1", &mape.br);
++	check_in("192.0.2.0", &mape.rules[0].prefix4);
++	check_in6("2001:db8:100::", &mape.rules[0].prefix6);
++	if (mape.rules[0].flags != 0 || mape.rules[0].ea_len != 16 ||
++	    mape.rules[0].prefix4_len != 24 || mape.rules[0].prefix6_len != 56)
++		errx(1, "raw S46 MAP-E rule fields mismatch");
++	if (!mape.rules[0].portparams.valid ||
++	    mape.rules[0].portparams.offset != 6 ||
++	    mape.rules[0].portparams.psid_len != 8 ||
++	    mape.rules[0].portparams.psid != 42)
++		errx(1, "raw S46 MAP-E port parameters mismatch");
++
++	check_reject_s46(bad_br, sizeof(bad_br), "bad BR length");
++	check_reject_s46(bad_rule, sizeof(bad_rule), "bad rule length");
++	check_reject_s46(bad_portparams, sizeof(bad_portparams),
++	    "bad portparams length");
++	check_reject_s46(bad_portparams_span, sizeof(bad_portparams_span),
++	    "bad portparams span");
++	check_reject_s46(duplicate_br, sizeof(duplicate_br), "duplicate BR");
++	check_reject_s46(duplicate_portparams, sizeof(duplicate_portparams),
++	    "duplicate portparams");
++	check_reject_s46(unknown_subopt, sizeof(unknown_subopt),
++	    "unknown MAP-E container sub-option");
++	check_reject_s46(unknown_rule_subopt, sizeof(unknown_rule_subopt),
++	    "unknown S46_RULE sub-option");
++}
++
++static void
++check_raw_s46_mape_cosmote(void)
++{
++	/*
++	 * Sanitized from a Cosmote DHCPv6 Reply.  The container has the
++	 * rule before the BR and a zero-length PSID.
++	 */
++	static const uint8_t s46_mape[] = {
++	    0x00, 0x59, 0x00, 0x16,
++	    0x00, 0x0e, 0x18, 0x57, 0xca, 0x3a, 0x00, 0x2a,
++	    0x2a, 0x02, 0x05, 0x86, 0x62, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x00, 0x00, 0x00,
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x2a, 0x02, 0x05, 0x86, 0x00, 0x00, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x06,
++	};
++	struct s46_mape mape;
++
++	memset(&mape, 0, sizeof(mape));
++	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
++	    &mape) != 0)
++		errx(1, "Cosmote raw S46 MAP-E option rejected");
++	if (!mape.valid || !mape.br_valid || !mape.rules[0].valid)
++		errx(1, "Cosmote raw S46 MAP-E state incomplete");
++	if (mape.rule_count != 1)
++		errx(1, "Cosmote raw S46 MAP-E rule count mismatch");
++
++	check_in6("2a02:586::406", &mape.br);
++	check_in("87.202.58.0", &mape.rules[0].prefix4);
++	check_in6("2a02:586:6200::", &mape.rules[0].prefix6);
++
++	if (mape.rules[0].flags != 0 || mape.rules[0].ea_len != 14 ||
++	    mape.rules[0].prefix4_len != 24 || mape.rules[0].prefix6_len != 42)
++		errx(1, "Cosmote raw S46 MAP-E rule fields mismatch");
++	if (!mape.rules[0].portparams.valid ||
++	    mape.rules[0].portparams.offset != 6 ||
++	    mape.rules[0].portparams.psid_len != 0 ||
++	    mape.rules[0].portparams.psid != 0)
++		errx(1, "Cosmote raw S46 MAP-E port parameters mismatch");
++}
++
++static void
++check_raw_s46_mape_multiple_rules(void)
++{
++	static const uint8_t s46_mape[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x17,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
++	    0x00, 0x59, 0x00, 0x17,
++	    0x80, 0x10, 0x18, 0xc6, 0x33, 0x64, 0x00, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x02, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x04, 0x06, 0x44, 0x00,
++	};
++	struct s46_mape mape;
++
++	memset(&mape, 0, sizeof(mape));
++	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
++	    &mape) != 0)
++		errx(1, "multiple-rule raw S46 MAP-E option rejected");
++	if (!mape.valid || !mape.br_valid || mape.rule_count != 2)
++		errx(1, "multiple-rule raw S46 MAP-E state incomplete");
++
++	check_in6("2001:db8:ffff::1", &mape.br);
++	check_in("192.0.2.0", &mape.rules[0].prefix4);
++	check_in6("2001:db8:100::", &mape.rules[0].prefix6);
++	if (mape.rules[0].flags != 0 || mape.rules[0].ea_len != 16 ||
++	    mape.rules[0].prefix4_len != 24 || mape.rules[0].prefix6_len != 56)
++		errx(1, "first MAP-E rule fields mismatch");
++	if (!mape.rules[0].portparams.valid ||
++	    mape.rules[0].portparams.offset != 6 ||
++	    mape.rules[0].portparams.psid_len != 8 ||
++	    mape.rules[0].portparams.psid != 42)
++		errx(1, "first MAP-E rule port parameters mismatch");
++
++	check_in("198.51.100.0", &mape.rules[1].prefix4);
++	check_in6("2001:db8:200::", &mape.rules[1].prefix6);
++	if (mape.rules[1].flags != 0x80 || mape.rules[1].ea_len != 16 ||
++	    mape.rules[1].prefix4_len != 24 || mape.rules[1].prefix6_len != 56)
++		errx(1, "second MAP-E rule fields mismatch");
++	if (!mape.rules[1].portparams.valid ||
++	    mape.rules[1].portparams.offset != 4 ||
++	    mape.rules[1].portparams.psid_len != 6 ||
++	    mape.rules[1].portparams.psid != 17)
++		errx(1, "second MAP-E rule port parameters mismatch");
++}
++
++static void
++check_reject_too_many_rules(void)
++{
++	static const uint8_t s46_rule[] = {
++	    0x00, 0x59, 0x00, 0x0f,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x00, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	};
++	static const uint8_t s46_br[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	};
++	uint8_t buf[sizeof(s46_br) + sizeof(s46_rule) *
++	    (MAX_S46_RULES + 1)];
++	uint8_t *p;
++	struct s46_mape mape;
++	size_t i;
++
++	p = buf;
++	memcpy(p, s46_br, sizeof(s46_br));
++	p += sizeof(s46_br);
++	for (i = 0; i < MAX_S46_RULES + 1; i++) {
++		memcpy(p, s46_rule, sizeof(s46_rule));
++		p += sizeof(s46_rule);
++	}
++
++	memset(&mape, 0, sizeof(mape));
++	if (parse_s46_mape_options(buf, sizeof(buf), &mape) == 0)
++		errx(1, "accepted too many MAP-E rules");
++}
++
++static void
++check_reject_s46(const uint8_t *buf, size_t len, const char *descr)
++{
++	struct s46_mape mape;
++
++	memset(&mape, 0, sizeof(mape));
++	if (parse_s46_mape_options((uint8_t *)buf, len, &mape) == 0)
++		errx(1, "accepted invalid raw S46 MAP-E option: %s", descr);
++}
++
++int
++main(void)
++{
++	check_valid_mape();
++	check_valid_mape_multiple_rules();
++	check_incomplete_mape_lease();
++	check_invalid_portparams();
++	check_duplicate_mape_lease();
++	check_portparams_without_rule();
++	check_raw_s46_mape();
++	check_raw_s46_mape_cosmote();
++	check_raw_s46_mape_multiple_rules();
++	check_reject_too_many_rules();
++	return (0);
++}
++
++int
++kw_cmp(const void *k, const void *e)
++{
++	return (strcmp(k, ((const struct keywords *)e)->k_name));
++}
++
++struct file *
++pushfile(const char *name, int secret)
++{
++	struct file *nfile;
++
++	(void)secret;
++	if ((nfile = calloc(1, sizeof(*nfile))) == NULL)
++		err(1, "calloc");
++	if ((nfile->name = strdup(name)) == NULL)
++		err(1, "strdup");
++	if ((nfile->stream = fopen(nfile->name, "r")) == NULL)
++		err(1, "%s", nfile->name);
++	nfile->lineno = TAILQ_EMPTY(&files) ? 1 : 0;
++	nfile->ungetsize = 16;
++	if ((nfile->ungetbuf = malloc(nfile->ungetsize)) == NULL)
++		err(1, "malloc");
++	TAILQ_INSERT_TAIL(&files, nfile, entry);
++	return (nfile);
++}
++
++int
++popfile(void)
++{
++	struct file *prev;
++
++	if ((prev = TAILQ_PREV(file, files, entry)) != NULL)
++		prev->errors += file->errors;
++	TAILQ_REMOVE(&files, file, entry);
++	fclose(file->stream);
++	free(file->name);
++	free(file->ungetbuf);
++	free(file);
++	file = prev;
++	return (file ? 0 : EOF);
++}
++
++static int
++igetc(void)
++{
++	if (file->ungetpos > 0)
++		return (file->ungetbuf[--file->ungetpos]);
++	return (getc(file->stream));
++}
++
++int
++lgetc(int quotec)
++{
++	int c, next;
++
++	if (quotec)
++		return (igetc());
++
++	while ((c = igetc()) == '\\') {
++		next = igetc();
++		if (next != '\n') {
++			c = next;
++			break;
++		}
++		file->lineno++;
++	}
++
++	if (c == EOF) {
++		if (file->eof_reached == 0) {
++			file->eof_reached = 1;
++			return ('\n');
++		}
++		while (c == EOF) {
++			if (file == topfile || popfile() == EOF)
++				return (EOF);
++			c = igetc();
++		}
++	}
++	return (c);
++}
++
++void
++lungetc(int c)
++{
++	void *p;
++
++	if (c == EOF)
++		return;
++	if (file->ungetpos >= file->ungetsize) {
++		p = reallocarray(file->ungetbuf, file->ungetsize, 2);
++		if (p == NULL)
++			err(1, "reallocarray");
++		file->ungetbuf = p;
++		file->ungetsize *= 2;
++	}
++	file->ungetbuf[file->ungetpos++] = c;
++}
++
++int
++findeol(void)
++{
++	int c;
++
++	while (1) {
++		c = lgetc(0);
++		if (c == '\n') {
++			file->lineno++;
++			break;
++		}
++		if (c == EOF)
++			break;
++	}
++	return (0);
++}
++
++void
++log_warn(const char *fmt, ...)
++{
++	va_list ap;
++
++	va_start(ap, fmt);
++	vwarn(fmt, ap);
++	va_end(ap);
++}
++
++void
++log_warnx(const char *fmt, ...)
++{
++	va_list ap;
++
++	va_start(ap, fmt);
++	vwarnx(fmt, ap);
++	va_end(ap);
++}
++
++void
++log_debug(const char *fmt, ...)
++{
++	(void)fmt;
++}
++
++void
++logit(int pri, const char *fmt, ...)
++{
++	va_list ap;
++
++	(void)pri;
++	va_start(ap, fmt);
++	vfprintf(stderr, fmt, ap);
++	fprintf(stderr, "\n");
++	va_end(ap);
++}
++
++void
++fatalx(const char *fmt, ...)
++{
++	va_list ap;
++
++	va_start(ap, fmt);
++	verrx(1, fmt, ap);
++	va_end(ap);
++}
+Index: regress/sbin/dhcp6leased/fuzz_s46_test.c
+===================================================================
+--- /dev/null	Thu Jan  1 00:00:00 1970
++++ regress/sbin/dhcp6leased/fuzz_s46_test.c	Fri May 15 12:26:13 2026
+@@ -0,0 +1,258 @@
++/*	$OpenBSD$ */
++
++#include <sys/types.h>
++#include <sys/mman.h>
++#include <sys/socket.h>
++
++#include <net/if.h>
++#include <netinet/in.h>
++
++#include <err.h>
++#include <event.h>
++#include <imsg.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include "log.h"
++#include "dhcp6leased.h"
++
++#define	FUZZ_ITERATIONS		50000
++#define	FUZZ_MAX_LEN		1024
++#define	MAX_MUTATIONS		32
++
++static uint32_t	 fuzz_rand(void);
++static void	 check_one(const uint8_t *, size_t);
++static void	 check_result(const struct s46_mape *);
++static void	 check_seed(const uint8_t *, size_t);
++static void	 check_random_bytes(void);
++static void	 check_random_options(void);
++static void	 mutate_seed(const uint8_t *, size_t);
++
++static uint32_t fuzz_state = 0x46e7c0de;
++static uint8_t *fuzz_area, *fuzz_guard;
++static size_t fuzz_pagesz;
++
++static uint32_t
++fuzz_rand(void)
++{
++	uint32_t x = fuzz_state;
++
++	x ^= x << 13;
++	x ^= x >> 17;
++	x ^= x << 5;
++	fuzz_state = x;
++	return (x);
++}
++
++static void
++check_result(const struct s46_mape *mape)
++{
++	size_t i;
++
++	if (!mape->valid)
++		errx(1, "accepted MAP-E state not marked valid");
++	if (!mape->br_valid)
++		errx(1, "accepted MAP-E state without BR");
++	if (mape->rule_count == 0 || mape->rule_count > MAX_S46_RULES)
++		errx(1, "accepted MAP-E state with invalid rule count");
++
++	for (i = 0; i < mape->rule_count; i++) {
++		if (!mape->rules[i].valid)
++			errx(1, "accepted MAP-E state with invalid rule");
++		if (mape->rules[i].ea_len > 48 ||
++		    mape->rules[i].prefix4_len > 32 ||
++		    mape->rules[i].prefix6_len > 128)
++			errx(1, "accepted MAP-E state with invalid prefix data");
++		if (mape->rules[i].portparams.valid &&
++		    (mape->rules[i].portparams.offset > 15 ||
++		    mape->rules[i].portparams.psid_len > 16 ||
++		    mape->rules[i].portparams.offset +
++		    mape->rules[i].portparams.psid_len > 16))
++			errx(1, "accepted MAP-E state with invalid portparams");
++	}
++
++	for (; i < MAX_S46_RULES; i++) {
++		if (mape->rules[i].valid)
++			errx(1, "accepted MAP-E state leaked extra rule");
++	}
++}
++
++static void
++check_one(const uint8_t *buf, size_t len)
++{
++	struct s46_mape mape;
++	uint8_t sentinel[sizeof(mape)];
++	uint8_t *p;
++	int ret;
++
++	if (len > FUZZ_MAX_LEN || len > fuzz_pagesz)
++		errx(1, "bad fuzz length");
++
++	memset(fuzz_area, 0xa5, fuzz_pagesz);
++	p = fuzz_guard - len;
++	if (len > 0)
++		memcpy(p, buf, len);
++
++	memset(sentinel, 0xa5, sizeof(sentinel));
++	memset(&mape, 0xa5, sizeof(mape));
++	ret = parse_s46_mape_options(p, len, &mape);
++	if (ret == 0)
++		check_result(&mape);
++	else if (memcmp(&mape, sentinel, sizeof(mape)) != 0)
++		errx(1, "rejected MAP-E input changed output state");
++}
++
++static void
++check_seed(const uint8_t *buf, size_t len)
++{
++	size_t i;
++
++	check_one(buf, len);
++	for (i = 0; i <= len; i++)
++		check_one(buf, i);
++}
++
++static void
++mutate_seed(const uint8_t *seed, size_t seedlen)
++{
++	uint8_t buf[FUZZ_MAX_LEN];
++	size_t i, len, mutations, pos;
++
++	len = seedlen;
++	if (len > sizeof(buf))
++		len = sizeof(buf);
++	memcpy(buf, seed, len);
++
++	if ((fuzz_rand() & 3) == 0)
++		len = fuzz_rand() % (len + 1);
++
++	mutations = 1 + (fuzz_rand() % MAX_MUTATIONS);
++	for (i = 0; i < mutations; i++) {
++		if (len == 0 || ((fuzz_rand() & 7) == 0 &&
++		    len < sizeof(buf))) {
++			buf[len++] = fuzz_rand() & 0xff;
++			continue;
++		}
++		pos = fuzz_rand() % len;
++		buf[pos] ^= 1U << (fuzz_rand() & 7);
++	}
++	check_one(buf, len);
++}
++
++static void
++check_random_bytes(void)
++{
++	uint8_t buf[FUZZ_MAX_LEN];
++	size_t i, len;
++
++	for (i = 0; i < FUZZ_ITERATIONS; i++) {
++		len = fuzz_rand() % sizeof(buf);
++		for (size_t j = 0; j < len; j++)
++			buf[j] = fuzz_rand() & 0xff;
++		check_one(buf, len);
++	}
++}
++
++static void
++check_random_options(void)
++{
++	uint8_t buf[FUZZ_MAX_LEN];
++	size_t i, len, optlen, remain;
++	uint16_t code, nlen;
++
++	for (i = 0; i < FUZZ_ITERATIONS; i++) {
++		len = 0;
++		while (len + sizeof(struct dhcp_option_hdr) < sizeof(buf) &&
++		    (fuzz_rand() & 3) != 0) {
++			remain = sizeof(buf) - len -
++			    sizeof(struct dhcp_option_hdr);
++			optlen = fuzz_rand() % (remain + 1);
++			code = htons(fuzz_rand() % 128);
++			nlen = htons(optlen);
++			memcpy(buf + len, &code, sizeof(code));
++			len += sizeof(code);
++			memcpy(buf + len, &nlen, sizeof(nlen));
++			len += sizeof(nlen);
++			for (size_t j = 0; j < optlen; j++)
++				buf[len + j] = fuzz_rand() & 0xff;
++			len += optlen;
++		}
++		check_one(buf, len);
++	}
++}
++
++int
++main(void)
++{
++	static const uint8_t valid_mape[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x17,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
++	};
++	static const uint8_t cosmote_mape[] = {
++	    0x00, 0x59, 0x00, 0x16,
++	    0x00, 0x0e, 0x18, 0x57, 0xca, 0x3a, 0x00, 0x2a,
++	    0x2a, 0x02, 0x05, 0x86, 0x62, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x00, 0x00, 0x00,
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x2a, 0x02, 0x05, 0x86, 0x00, 0x00, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x06,
++	};
++	static const uint8_t multi_mape[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x17,
++	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
++	    0x00, 0x59, 0x00, 0x17,
++	    0x80, 0x10, 0x18, 0xc6, 0x33, 0x64, 0x00, 0x38,
++	    0x20, 0x01, 0x0d, 0xb8, 0x02, 0x00, 0x00,
++	    0x00, 0x5d, 0x00, 0x04, 0x04, 0x06, 0x44, 0x00,
++	};
++
++	fuzz_pagesz = getpagesize();
++	if (FUZZ_MAX_LEN > fuzz_pagesz)
++		errx(1, "FUZZ_MAX_LEN exceeds page size");
++	fuzz_area = mmap(NULL, fuzz_pagesz * 2, PROT_READ | PROT_WRITE,
++	    MAP_ANON | MAP_PRIVATE, -1, 0);
++	if (fuzz_area == MAP_FAILED)
++		err(1, "mmap");
++	fuzz_guard = fuzz_area + fuzz_pagesz;
++	if (mprotect(fuzz_guard, fuzz_pagesz, PROT_NONE) == -1)
++		err(1, "mprotect");
++
++	check_seed(valid_mape, sizeof(valid_mape));
++	check_seed(cosmote_mape, sizeof(cosmote_mape));
++	check_seed(multi_mape, sizeof(multi_mape));
++
++	for (size_t i = 0; i < FUZZ_ITERATIONS / 10; i++) {
++		mutate_seed(valid_mape, sizeof(valid_mape));
++		mutate_seed(cosmote_mape, sizeof(cosmote_mape));
++		mutate_seed(multi_mape, sizeof(multi_mape));
++	}
++	check_random_bytes();
++	check_random_options();
++
++	return (0);
++}
++
++void
++log_warnx(const char *fmt, ...)
++{
++	(void)fmt;
++}
++
++void
++log_debug(const char *fmt, ...)
++{
++	(void)fmt;
++}
+Index: sbin/dhcp6leased/Makefile
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/Makefile,v
+diff -u -p sbin/dhcp6leased/Makefile
+--- sbin/dhcp6leased/Makefile	Fri May 15 12:26:12 2026
++++ sbin/dhcp6leased/Makefile	Fri May 15 12:26:13 2026
+@@ -1,7 +1,7 @@
+ #	$OpenBSD: Makefile,v 1.2 2024/06/05 16:15:47 florian Exp $
+ 
+ PROG=	dhcp6leased
+-SRCS=	control.c dhcp6leased.c engine.c frontend.c log.c
++SRCS=	control.c dhcp6leased.c engine.c frontend.c log.c s46.c
+ SRCS+=	parse.y printconf.c parse_lease.y
+ 
+ MAN=	dhcp6leased.8 dhcp6leased.conf.5
+Index: sbin/dhcp6leased/dhcp6leased.c
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/dhcp6leased.c,v
+diff -u -p sbin/dhcp6leased/dhcp6leased.c
+--- sbin/dhcp6leased/dhcp6leased.c	Fri May 15 12:26:12 2026
++++ sbin/dhcp6leased/dhcp6leased.c	Fri May 15 12:26:13 2026
+@@ -1006,6 +1006,7 @@ write_lease_file(struct imsg_lease_info *imsg_lease_in
+ 	char			 tmpl[] = _PATH_LEASE"XXXXXXXXXX";
+ 	char			 ntopbuf[INET6_ADDRSTRLEN];
+ 	char			*p;
++	size_t			 j, rule_count;
+ 
+ 	if (no_lease_files)
+ 		return;
+@@ -1051,6 +1052,89 @@ write_lease_file(struct imsg_lease_info *imsg_lease_in
+ 		rem -= len;
+ 	}
+ 
++	if (imsg_lease_info->mape.valid) {
++		const char	*br, *prefix4, *prefix6;
++		char		 brbuf[INET6_ADDRSTRLEN];
++		char		 prefix4buf[INET_ADDRSTRLEN];
++		char		 prefix6buf[INET6_ADDRSTRLEN];
++
++		br = inet_ntop(AF_INET6, &imsg_lease_info->mape.br, brbuf,
++		    sizeof(brbuf));
++		if (br == NULL) {
++			log_warn("%s: failed to print MAP-E BR for %s",
++			    __func__, if_name);
++			return;
++		}
++		len = snprintf(p, rem, "%s%s\n", LEASE_MAPE_BR_PREFIX,
++		    br);
++		if (len == -1 || len >= rem) {
++			log_warnx("%s: failed to encode MAP-E BR for %s",
++			    __func__, if_name);
++			return;
++		}
++		p += len;
++		rem -= len;
++
++		rule_count = imsg_lease_info->mape.rule_count;
++		if (rule_count > MAX_S46_RULES) {
++			log_warnx("%s: too many MAP-E rules for %s",
++			    __func__, if_name);
++			rule_count = MAX_S46_RULES;
++		}
++		for (j = 0; j < rule_count; j++) {
++			prefix4 = inet_ntop(AF_INET,
++			    &imsg_lease_info->mape.rules[j].prefix4,
++			    prefix4buf, sizeof(prefix4buf));
++			if (prefix4 == NULL) {
++				log_warn("%s: failed to print MAP-E IPv4 "
++				    "prefix for %s", __func__, if_name);
++				return;
++			}
++			prefix6 = inet_ntop(AF_INET6,
++			    &imsg_lease_info->mape.rules[j].prefix6,
++			    prefix6buf, sizeof(prefix6buf));
++			if (prefix6 == NULL) {
++				log_warn("%s: failed to print MAP-E IPv6 "
++				    "prefix for %s", __func__, if_name);
++				return;
++			}
++			len = snprintf(p, rem, "%s%u %u %s %u %s %u\n",
++			    LEASE_MAPE_RULE_PREFIX,
++			    imsg_lease_info->mape.rules[j].flags,
++			    imsg_lease_info->mape.rules[j].ea_len,
++			    prefix4,
++			    imsg_lease_info->mape.rules[j].prefix4_len,
++			    prefix6,
++			    imsg_lease_info->mape.rules[j].prefix6_len);
++			if (len == -1 || len >= rem) {
++				log_warnx("%s: failed to encode MAP-E rule "
++				    "for %s", __func__, if_name);
++				return;
++			}
++			p += len;
++			rem -= len;
++
++			if (imsg_lease_info->mape.rules[j].portparams.valid) {
++				len = snprintf(p, rem, "%s%u %u %u\n",
++				    LEASE_MAPE_PORT_PREFIX,
++				    imsg_lease_info->mape.rules[j].
++				    portparams.offset,
++				    imsg_lease_info->mape.rules[j].
++				    portparams.psid_len,
++				    imsg_lease_info->mape.rules[j].
++				    portparams.psid);
++				if (len == -1 || len >= rem) {
++					log_warnx("%s: failed to encode MAP-E "
++					    "port parameters for %s", __func__,
++					    if_name);
++					return;
++				}
++				p += len;
++				rem -= len;
++			}
++		}
++	}
++
+ 	len = sizeof(lease_buf) - rem;
+ 
+ 	if ((fd = mkstemp(tmpl)) == -1) {
+@@ -1089,6 +1173,7 @@ read_lease_file(struct imsg_ifinfo *imsg_ifinfo)
+ 		return;
+ 
+ 	memset(imsg_ifinfo->pds, 0, sizeof(imsg_ifinfo->pds));
++	memset(&imsg_ifinfo->mape, 0, sizeof(imsg_ifinfo->mape));
+ 
+ 	if (if_indextoname(imsg_ifinfo->if_index, if_name) == NULL) {
+ 		log_warnx("%s: cannot find interface %d", __func__,
+Index: sbin/dhcp6leased/dhcp6leased.h
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/dhcp6leased.h,v
+diff -u -p sbin/dhcp6leased/dhcp6leased.h
+--- sbin/dhcp6leased/dhcp6leased.h	Fri May 15 12:26:12 2026
++++ sbin/dhcp6leased/dhcp6leased.h	Fri May 15 12:30:49 2026
+@@ -37,8 +37,12 @@
+ #define	XID_SIZE		3
+ #define	SERVERID_SIZE		130 /* 2 octet type, max 128 octets data */
+ #define	MAX_IA			32
++#define	MAX_S46_RULES		8
+ #define	LEASE_SIZE		4096
+ #define	LEASE_IA_PD_PREFIX	"ia_pd "
++#define	LEASE_MAPE_BR_PREFIX	"mape_br "
++#define	LEASE_MAPE_RULE_PREFIX	"mape_rule "
++#define	LEASE_MAPE_PORT_PREFIX	"mape_portparams "
+ /* MAXDNAME from arpa/namesr.h */
+ #define	DHCP6LEASED_MAX_DNSSL	1025
+ #define	MAX_RDNS_COUNT		8 /* max nameserver in a RTM_PROPOSAL */
+@@ -75,6 +79,14 @@
+ #define	DHO_IA_PREFIX		26
+ #define	DHO_SOL_MAX_RT		82
+ #define	DHO_INF_MAX_RT		83
++#define	DHO_S46_RULE		89
++#define	DHO_S46_BR		90
++#define	DHO_S46_DMR		91
++#define	DHO_S46_V4V6BIND	92
++#define	DHO_S46_PORTPARAMS	93
++#define	DHO_S46_CONT_MAPE	94
++#define	DHO_S46_CONT_MAPT	95
++#define	DHO_S46_CONT_LW		96
+ 
+ /* Status Code Option status codes */
+ #define	DHCP_STATUS_SUCCESS		0
+@@ -184,6 +196,32 @@ struct prefix {
+ 	uint32_t	 pltime;
+ };
+ 
++struct s46_portparams {
++	int		 valid;
++	uint8_t		 offset;
++	uint8_t		 psid_len;
++	uint16_t	 psid;
++};
++
++struct s46_rule {
++	int			 valid;
++	uint8_t			 flags;
++	uint8_t			 ea_len;
++	uint8_t			 prefix4_len;
++	struct in_addr		 prefix4;
++	uint8_t			 prefix6_len;
++	struct in6_addr		 prefix6;
++	struct s46_portparams	 portparams;
++};
++
++struct s46_mape {
++	int			 valid;
++	int			 br_valid;
++	struct in6_addr		 br;
++	size_t			 rule_count;
++	struct s46_rule		 rules[MAX_S46_RULES];
++};
++
+ struct ctl_engine_info {
+ 	uint32_t		if_index;
+ 	int			running;
+@@ -194,6 +232,7 @@ struct ctl_engine_info {
+ 	uint32_t		t1;
+ 	uint32_t		t2;
+ 	struct prefix		pds[MAX_IA];
++	struct s46_mape		mape;
+ };
+ 
+ struct iface_pd_conf {
+@@ -216,6 +255,7 @@ struct iface_conf {
+ 	    iface_ia_conf)			 iface_ia_list;
+ 	uint32_t				 ia_count;
+ 	char					 name[IF_NAMESIZE];
++	int					 request_mape;
+ };
+ 
+ struct dhcp6leased_conf {
+@@ -229,6 +269,7 @@ struct imsg_ifinfo {
+ 	int			running;
+ 	int			link_state;
+ 	struct prefix		pds[MAX_IA];
++	struct s46_mape		mape;
+ };
+ 
+ struct imsg_dhcp {
+@@ -244,11 +285,13 @@ struct imsg_req_dhcp {
+ 	int			 serverid_len;
+ 	uint8_t			 serverid[SERVERID_SIZE];
+ 	struct prefix		 pds[MAX_IA];
++	struct s46_mape		 mape;
+ };
+ 
+ struct imsg_lease_info {
+ 	uint32_t		 if_index;
+ 	struct prefix		 pds[MAX_IA];
++	struct s46_mape		 mape;
+ };
+ 
+ /* dhcp6leased.c */
+@@ -263,6 +306,11 @@ const char		*sin6_to_str(struct sockaddr_in6 *);
+ 
+ /* engine.c */
+ const char		*dhcp_message_type2str(int);
++
++/* s46.c */
++
++int			 parse_s46_mape_options(uint8_t *, size_t,
++			     struct s46_mape *);
+ 
+ /* frontend.c */
+ struct iface_conf	*find_iface_conf(struct iface_conf_head *, char *);
+Index: sbin/dhcp6leased/engine.c
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/engine.c,v
+diff -u -p sbin/dhcp6leased/engine.c
+--- sbin/dhcp6leased/engine.c	Fri May 15 12:26:12 2026
++++ sbin/dhcp6leased/engine.c	Fri May 15 12:28:48 2026
+@@ -107,6 +107,8 @@ struct dhcp6leased_iface {
+ 	uint8_t				 serverid[SERVERID_SIZE];
+ 	struct prefix			 pds[MAX_IA];
+ 	struct prefix			 new_pds[MAX_IA];
++	struct s46_mape			 mape;
++	struct s46_mape			 new_mape;
+ 	struct timespec			 request_time;
+ 	struct timespec			 elapsed_time_start;
+ 	uint32_t			 lease_time;
+@@ -146,7 +148,7 @@ int			 engine_imsg_compose_main(int, pid_t, void *, ui
+ const char		*dhcp_option_type2str(int);
+ const char		*dhcp_duid2str(int, uint8_t *);
+ const char		*dhcp_status2str(int);
+-void			 in6_prefixlen2mask(struct in6_addr *, int len);
++void			 in6_prefixlen2mask(struct in6_addr *, int);
+ 
+ struct dhcp6leased_conf	*engine_conf;
+ 
+@@ -593,6 +595,7 @@ send_interface_info(struct dhcp6leased_iface *iface, p
+ 	cei.t1 = iface->t1;
+ 	cei.t2 = iface->t2;
+ 	memcpy(&cei.pds, &iface->pds, sizeof(cei.pds));
++	memcpy(&cei.mape, &iface->mape, sizeof(cei.mape));
+ 	engine_imsg_compose_frontend(IMSG_CTL_SHOW_INTERFACE_INFO, pid, &cei,
+ 	    sizeof(cei));
+ }
+@@ -678,6 +681,9 @@ engine_update_iface(struct imsg_ifinfo *imsg_ifinfo)
+ 		if (iface->pds[0].prefix_len == 0)
+ 			memcpy(iface->pds, imsg_ifinfo->pds,
+ 			    sizeof(iface->pds));
++		if (!iface->mape.valid)
++			memcpy(&iface->mape, &imsg_ifinfo->mape,
++			    sizeof(iface->mape));
+ 
+ 		got_lease = 0;
+ 		for (i = 0; i < iface_conf->ia_count; i++) {
+@@ -732,6 +738,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct ims
+ 	size_t			 rem;
+ 	uint32_t		 t1, t2, lease_time;
+ 	int			 serverid_len, rapid_commit = 0;
++	int			 mape_invalid = 0;
+ 	uint8_t			 serverid[SERVERID_SIZE];
+ 	uint8_t			*p;
+ 	char			 ifnamebuf[IF_NAMESIZE], *if_name;
+@@ -754,6 +761,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct ims
+ 
+ 	serverid_len = t1 = t2 = lease_time = 0;
+ 	memset(iface->new_pds, 0, sizeof(iface->new_pds));
++	memset(&iface->new_mape, 0, sizeof(iface->new_mape));
+ 
+ 	p = dhcp->packet;
+ 	rem = dhcp->len;
+@@ -855,6 +863,19 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct ims
+ 			}
+ 			rapid_commit = 1;
+ 			break;
++		case DHO_S46_CONT_MAPE:
++			if (iface->new_mape.valid) {
++				log_warnx("%s: ignoring duplicate S46 "
++				    "MAP-E container", __func__);
++				break;
++			}
++			if (parse_s46_mape_options(p, opt_hdr.len,
++			    &iface->new_mape) != 0) {
++				log_warnx("%s: ignoring invalid S46 MAP-E "
++				    "container", __func__);
++				mape_invalid = 1;
++			}
++			break;
+ 		default:
+ 			log_debug("unhandled option: %u", opt_hdr.code);
+ 			break;
+@@ -894,6 +915,10 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct ims
+ 		    &pd->prefix, ntopbuf, INET6_ADDRSTRLEN), pd->prefix_len);
+ 	}
+ 
++	if (mape_invalid && !iface->new_mape.valid)
++		memcpy(&iface->new_mape, &iface->mape,
++		    sizeof(iface->new_mape));
++
+ 	switch (hdr.msg_type) {
+ 	case DHCPSOLICIT:
+ 	case DHCPREQUEST:
+@@ -920,6 +945,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct ims
+ 		iface->serverid_len = serverid_len;
+ 		memcpy(iface->serverid, serverid, SERVERID_SIZE);
+ 		memcpy(iface->pds, iface->new_pds, sizeof(iface->pds));
++		memcpy(&iface->mape, &iface->new_mape, sizeof(iface->mape));
+ 		state_transition(iface, IF_REQUESTING);
+ 		break;
+ 	case DHCPREPLY:
+@@ -950,6 +976,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct ims
+ 		else
+ 			iface->t2 = t2;
+ 		iface->lease_time = lease_time;
++		memcpy(&iface->mape, &iface->new_mape, sizeof(iface->mape));
+ 		clock_gettime(CLOCK_MONOTONIC, &iface->request_time);
+ 		state_transition(iface, IF_BOUND);
+ 		break;
+@@ -1287,6 +1314,7 @@ request_dhcp_request(struct dhcp6leased_iface *iface)
+ 		imsg.serverid_len = iface->serverid_len;
+ 		memcpy(imsg.serverid, iface->serverid, SERVERID_SIZE);
+ 		memcpy(imsg.pds, iface->pds, sizeof(iface->pds));
++		memcpy(&imsg.mape, &iface->mape, sizeof(imsg.mape));
+ 		break;
+ 	}
+ 	switch (iface->state) {
+@@ -1368,11 +1396,14 @@ configure_interfaces(struct dhcp6leased_iface *iface)
+ 	}
+ 
+ 	memcpy(iface->pds, iface->new_pds, sizeof(iface->pds));
++	memcpy(&iface->mape, &iface->new_mape, sizeof(iface->mape));
+ 	memset(iface->new_pds, 0, sizeof(iface->new_pds));
++	memset(&iface->new_mape, 0, sizeof(iface->new_mape));
+ 
+ 	memset(&imsg_lease_info, 0, sizeof(imsg_lease_info));
+ 	imsg_lease_info.if_index = iface->if_index;
+ 	memcpy(imsg_lease_info.pds, iface->pds, sizeof(iface->pds));
++	memcpy(&imsg_lease_info.mape, &iface->mape, sizeof(imsg_lease_info.mape));
+ 	engine_imsg_compose_main(IMSG_WRITE_LEASE, 0, &imsg_lease_info,
+ 	    sizeof(imsg_lease_info));
+ }
+@@ -1624,6 +1655,22 @@ dhcp_option_type2str(int code)
+ 		return "DHO_SOL_MAX_RT";
+ 	case DHO_INF_MAX_RT:
+ 		return "DHO_INF_MAX_RT";
++	case DHO_S46_RULE:
++		return "DHO_S46_RULE";
++	case DHO_S46_BR:
++		return "DHO_S46_BR";
++	case DHO_S46_DMR:
++		return "DHO_S46_DMR";
++	case DHO_S46_V4V6BIND:
++		return "DHO_S46_V4V6BIND";
++	case DHO_S46_PORTPARAMS:
++		return "DHO_S46_PORTPARAMS";
++	case DHO_S46_CONT_MAPE:
++		return "DHO_S46_CONT_MAPE";
++	case DHO_S46_CONT_MAPT:
++		return "DHO_S46_CONT_MAPT";
++	case DHO_S46_CONT_LW:
++		return "DHO_S46_CONT_LW";
+ 	default:
+ 		snprintf(buf, sizeof(buf), "Unknown [%u]", code &0xffff);
+ 		return buf;
+Index: sbin/dhcp6leased/frontend.c
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/frontend.c,v
+diff -u -p sbin/dhcp6leased/frontend.c
+--- sbin/dhcp6leased/frontend.c	Fri May 15 12:26:12 2026
++++ sbin/dhcp6leased/frontend.c	Fri May 15 12:32:40 2026
+@@ -65,6 +65,7 @@ struct iface {
+ 	int			 serverid_len;
+ 	uint8_t			 serverid[SERVERID_SIZE];
+ 	struct prefix		 pds[MAX_IA];
++	struct s46_mape		 mape;
+ };
+ 
+ __dead void	 frontend_shutdown(void);
+@@ -739,6 +740,7 @@ iface_data_from_imsg(struct iface* iface, struct imsg_
+ 	iface->serverid_len = imsg->serverid_len;
+ 	memcpy(iface->serverid, imsg->serverid, SERVERID_SIZE);
+ 	memcpy(iface->pds, imsg->pds, sizeof(iface->pds));
++	memcpy(&iface->mape, &imsg->mape, sizeof(iface->mape));
+ }
+ 
+ ssize_t
+@@ -754,6 +756,7 @@ build_packet(uint8_t message_type, struct iface *iface
+ 	size_t				 i;
+ 	ssize_t				 len;
+ 	uint16_t			 request_option_code, elapsed_time;
++	size_t				 requested_count;
+ 	const uint16_t			 options[] = {DHO_SOL_MAX_RT,
+ 					     DHO_INF_MAX_RT};
+ 	uint8_t				*p;
+@@ -848,12 +851,20 @@ build_packet(uint8_t message_type, struct iface *iface
+ 		p += sizeof(struct dhcp_iaprefix);
+ 	}
+ 
++	requested_count = nitems(options);
++	if (iface_conf->request_mape)
++		requested_count++;
+ 	opt_hdr.code = htons(DHO_ORO);
+-	opt_hdr.len = htons(sizeof(request_option_code) * nitems(options));
++	opt_hdr.len = htons(sizeof(request_option_code) * requested_count);
+ 	memcpy(p, &opt_hdr, sizeof(struct dhcp_option_hdr));
+ 	p += sizeof(struct dhcp_option_hdr);
+ 	for (i = 0; i < nitems(options); i++) {
+ 		request_option_code = htons(options[i]);
++		memcpy(p, &request_option_code, sizeof(uint16_t));
++		p += sizeof(uint16_t);
++	}
++	if (iface_conf->request_mape) {
++		request_option_code = htons(DHO_S46_CONT_MAPE);
+ 		memcpy(p, &request_option_code, sizeof(uint16_t));
+ 		p += sizeof(uint16_t);
+ 	}
+Index: sbin/dhcp6leased/parse.y
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/parse.y,v
+diff -u -p sbin/dhcp6leased/parse.y
+--- sbin/dhcp6leased/parse.y	Sat Apr 26 21:05:55 2025
++++ sbin/dhcp6leased/parse.y	Fri May 15 12:30:49 2026
+@@ -95,7 +95,7 @@ typedef struct {
+ 
+ %}
+ 
+-%token	ERROR DELEGATION FOR ON PREFIX REQUEST RAPID COMMIT
++%token	ERROR DELEGATION FOR MAPE ON PREFIX REQUEST RAPID COMMIT
+ 
+ %token	<v.string>	STRING
+ %token	<v.number>	NUMBER
+@@ -108,6 +108,7 @@ grammar		: /* empty */
+ 		| grammar varset '\n'
+ 		| grammar conf_main '\n'
+ 		| grammar ia_pd '\n'
++		| grammar mape_request '\n'
+ 		| grammar error '\n'		{ file->errors++; }
+ 		;
+ 
+@@ -153,6 +154,15 @@ conf_main	: REQUEST RAPID COMMIT {
+ 		}
+ 		;
+ 
++mape_request	: REQUEST MAPE ON STRING {
++			struct iface_conf *iface;
++
++			iface = conf_get_iface($4);
++			iface->request_mape = 1;
++			free($4);
++		}
++		;
++
+ ia_pd		: REQUEST PREFIX DELEGATION ON STRING FOR {
+ 			iface_conf = conf_get_iface($5);
+ 			iface_ia_conf = calloc(1, sizeof(*iface_ia_conf));
+@@ -243,6 +253,7 @@ lookup(char *s)
+ 		{"commit",	COMMIT},
+ 		{"delegation",	DELEGATION},
+ 		{"for",		FOR},
++		{"mape",	MAPE},
+ 		{"on",		ON},
+ 		{"prefix",	PREFIX},
+ 		{"rapid",	RAPID},
+Index: sbin/dhcp6leased/parse_lease.y
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/parse_lease.y,v
+diff -u -p sbin/dhcp6leased/parse_lease.y
+--- sbin/dhcp6leased/parse_lease.y	Fri May 15 12:26:12 2026
++++ sbin/dhcp6leased/parse_lease.y	Fri May 15 12:26:13 2026
+@@ -73,7 +73,7 @@ typedef struct {
+ 
+ %}
+ 
+-%token	ERROR IAPD
++%token	ERROR IAPD MAPEBR MAPEPORTPARAMS MAPERULE
+ 
+ %token	<v.string>	STRING
+ %token	<v.number>	NUMBER
+@@ -83,6 +83,9 @@ typedef struct {
+ grammar		: /* empty */
+ 		| grammar '\n'
+ 		| grammar ia_pd '\n'
++		| grammar mape_br '\n'
++		| grammar mape_rule '\n'
++		| grammar mape_portparams '\n'
+ 		| grammar error '\n'		{ file->errors++; }
+ 		;
+ 
+@@ -110,6 +113,117 @@ ia_pd		: IAPD NUMBER STRING NUMBER {
+ 			free($3);
+ 		}
+ 		;
++
++mape_br		: MAPEBR STRING {
++			if (ifinfo->mape.br_valid) {
++				yyerror("duplicate MAP-E BR address");
++				free($2);
++				YYERROR;
++			}
++			if (inet_pton(AF_INET6, $2, &ifinfo->mape.br) != 1) {
++				yyerror("invalid MAP-E BR address %s", $2);
++				free($2);
++				YYERROR;
++			}
++			ifinfo->mape.br_valid = 1;
++			if (ifinfo->mape.rule_count > 0)
++				ifinfo->mape.valid = 1;
++			free($2);
++		}
++		;
++
++mape_rule	: MAPERULE NUMBER NUMBER STRING NUMBER STRING NUMBER {
++			struct s46_rule	*rule;
++
++			if (ifinfo->mape.rule_count >=
++			    nitems(ifinfo->mape.rules)) {
++				yyerror("too many MAP-E rules");
++				goto err;
++			}
++			rule = &ifinfo->mape.rules[ifinfo->mape.rule_count];
++			if ($2 < 0 || $2 > 255) {
++				yyerror("invalid MAP-E flags %lld", $2);
++				goto err;
++			}
++			if ($3 < 0 || $3 > 48) {
++				yyerror("invalid MAP-E EA length %lld", $3);
++				goto err;
++			}
++			if ($5 < 0 || $5 > 32) {
++				yyerror("invalid MAP-E IPv4 prefix length %lld",
++				    $5);
++				goto err;
++			}
++			if ($7 < 0 || $7 > 128) {
++				yyerror("invalid MAP-E IPv6 prefix length %lld",
++				    $7);
++				goto err;
++			}
++			if (inet_pton(AF_INET, $4,
++			    &rule->prefix4) != 1) {
++				yyerror("invalid MAP-E IPv4 prefix %s", $4);
++				goto err;
++			}
++			if (inet_pton(AF_INET6, $6,
++			    &rule->prefix6) != 1) {
++				yyerror("invalid MAP-E IPv6 prefix %s", $6);
++				goto err;
++			}
++			rule->flags = $2;
++			rule->ea_len = $3;
++			rule->prefix4_len = $5;
++			rule->prefix6_len = $7;
++			rule->valid = 1;
++			ifinfo->mape.rule_count++;
++			if (ifinfo->mape.br_valid)
++				ifinfo->mape.valid = 1;
++			free($4);
++			free($6);
++			goto done;
++err:
++			free($4);
++			free($6);
++			YYERROR;
++done:
++			;
++		}
++		;
++
++mape_portparams : MAPEPORTPARAMS NUMBER NUMBER NUMBER {
++			struct s46_rule	*rule;
++
++			if (ifinfo->mape.rule_count == 0) {
++				yyerror("MAP-E port parameters without rule");
++				YYERROR;
++			}
++			rule = &ifinfo->mape.rules[ifinfo->mape.rule_count - 1];
++			if ($2 < 0 || $2 > 15) {
++				yyerror("invalid MAP-E PSID offset %lld", $2);
++				YYERROR;
++			}
++			if ($3 < 0 || $3 > 16) {
++				yyerror("invalid MAP-E PSID length %lld", $3);
++				YYERROR;
++			}
++			if ($2 + $3 > 16) {
++				yyerror("invalid MAP-E PSID offset/length %lld/%lld",
++				    $2, $3);
++				YYERROR;
++			}
++			if ($4 < 0 || $4 >= (1 << $3)) {
++				yyerror("invalid MAP-E PSID %lld", $4);
++				YYERROR;
++			}
++			if (rule->portparams.valid) {
++				yyerror("duplicate MAP-E port parameters");
++				YYERROR;
++			}
++			rule->portparams.offset = $2;
++			rule->portparams.psid_len = $3;
++			rule->portparams.psid = $4;
++			rule->portparams.valid = 1;
++		}
++		;
+ %%
+ 
+ struct keywords {
+@@ -139,6 +253,9 @@ pllookup(char *s)
+ 	/* This has to be sorted always. */
+ 	static const struct keywords keywords[] = {
+ 		{"ia_pd",	IAPD},
++		{"mape_br",	MAPEBR},
++		{"mape_portparams",	MAPEPORTPARAMS},
++		{"mape_rule",	MAPERULE},
+ 	};
+ 	const struct keywords	*p;
+ 
+Index: sbin/dhcp6leased/printconf.c
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/printconf.c,v
+diff -u -p sbin/dhcp6leased/printconf.c
+--- sbin/dhcp6leased/printconf.c	Mon Jun  3 14:08:31 2024
++++ sbin/dhcp6leased/printconf.c	Fri May 15 12:30:50 2026
+@@ -94,6 +94,9 @@ print_iface_conf(struct iface_conf *iface, int verbose
+ 		print_iface_ia_conf(ia_conf, verbose);
+ 		printf("}\n");
+ 	}
++
++	if (iface->request_mape)
++		printf("request mape on %s\n", iface->name);
+ }
+ void
+ print_config(struct dhcp6leased_conf *conf, int verbose)
+Index: sbin/dhcp6leased/dhcp6leased.conf.5
+===================================================================
+RCS file: /cvs/src/sbin/dhcp6leased/dhcp6leased.conf.5,v
+diff -u -p sbin/dhcp6leased/dhcp6leased.conf.5
+--- sbin/dhcp6leased/dhcp6leased.conf.5	Tue Jul  8 17:26:45 2025
++++ sbin/dhcp6leased/dhcp6leased.conf.5	Fri May 15 12:33:09 2026
+@@ -67,6 +67,18 @@ daemon as a whole.
+ .It Ic request rapid commit
+ Send the rapid commit DHCPv6 option, requesting a two-message exchange
+ from the server instead of the normal four-message exchange.
++.It Ic request mape on Ar name
++Request the Softwire46 MAP-E container option
++(DHCPv6 option 94)
++from the DHCPv6 server on the upstream network interface
++.Ar name .
++When this is set,
++.Xr dhcp6leased 8
++asks the server for MAP-E parameters and persists any
++BR address, mapping rules, and port parameters it learns.
++If the option is unset (the default),
++.Xr dhcp6leased 8
++does not request MAP-E and ignores any MAP-E data the server sends.
+ .El
+ .Ss Prefix delegation
+ A list of interfaces on which to request prefix delegation:
+Index: sbin/dhcp6leased/s46.c
+===================================================================
+--- /dev/null	Thu Jan  1 00:00:00 1970
++++ sbin/dhcp6leased/s46.c	Fri May 15 12:29:53 2026
+@@ -0,0 +1,267 @@
++/*	$OpenBSD$ */
++
++/*
++ * Copyright (c) 2026 Panagiotis Atmatzidis <atma@convalesco.org>
++ *
++ * Permission to use, copy, modify, and distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
++ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
++ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
++ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ */
++
++#include <sys/types.h>
++#include <sys/socket.h>
++
++#include <net/if.h>
++#include <netinet/in.h>
++
++#include <arpa/inet.h>
++
++#include <event.h>
++#include <imsg.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++#include "log.h"
++#include "dhcp6leased.h"
++
++static void	 mask_in_addr(struct in_addr *, uint8_t);
++static void	 mask_in6_addr(struct in6_addr *, uint8_t);
++static int	 parse_s46_rule(uint8_t *, size_t, struct s46_rule *);
++static int	 parse_s46_rule_options(uint8_t *, size_t, struct s46_rule *);
++
++static void
++mask_in_addr(struct in_addr *addr, uint8_t prefix_len)
++{
++	uint32_t	 a, mask;
++
++	a = ntohl(addr->s_addr);
++	if (prefix_len == 0)
++		mask = 0;
++	else
++		mask = 0xffffffffU << (32 - prefix_len);
++	addr->s_addr = htonl(a & mask);
++}
++
++static void
++mask_in6_addr(struct in6_addr *addr, uint8_t prefix_len)
++{
++	uint8_t	 mask;
++	int	 i;
++
++	for (i = 0; i < 16; i++) {
++		if (prefix_len >= 8) {
++			mask = 0xff;
++			prefix_len -= 8;
++		} else if (prefix_len > 0) {
++			mask = 0xff << (8 - prefix_len);
++			prefix_len = 0;
++		} else
++			mask = 0;
++		addr->s6_addr[i] &= mask;
++	}
++}
++
++int
++parse_s46_mape_options(uint8_t *p, size_t len, struct s46_mape *mape)
++{
++	struct dhcp_option_hdr	 opt_hdr;
++	struct s46_mape		 nmape;
++
++	memset(&nmape, 0, sizeof(nmape));
++	while (len >= sizeof(struct dhcp_option_hdr)) {
++		memcpy(&opt_hdr, p, sizeof(opt_hdr));
++		opt_hdr.code = ntohs(opt_hdr.code);
++		opt_hdr.len = ntohs(opt_hdr.len);
++		p += sizeof(opt_hdr);
++		len -= sizeof(opt_hdr);
++
++		if (len < opt_hdr.len) {
++			log_warnx("%s: malformed S46 MAP-E container",
++			    __func__);
++			return (-1);
++		}
++
++		switch (opt_hdr.code) {
++		case DHO_S46_BR:
++			if (opt_hdr.len != sizeof(nmape.br)) {
++				log_warnx("%s: invalid S46 BR length: %u",
++				    __func__, opt_hdr.len);
++				return (-1);
++			}
++			if (nmape.br_valid) {
++				log_warnx("%s: duplicate S46 BR option",
++				    __func__);
++				return (-1);
++			}
++			memcpy(&nmape.br, p, sizeof(nmape.br));
++			nmape.br_valid = 1;
++			break;
++		case DHO_S46_RULE:
++			if (nmape.rule_count >= nitems(nmape.rules)) {
++				log_warnx("%s: too many S46 MAP-E rules",
++				    __func__);
++				return (-1);
++			}
++			if (parse_s46_rule(p, opt_hdr.len,
++			    &nmape.rules[nmape.rule_count]) != 0)
++				return (-1);
++			nmape.rule_count++;
++			break;
++		default:
++			/*
++			 * RFC 7598 does not require strict rejection
++			 * of unknown S46 sub-options, but the MAP-E
++			 * container is a small, well-defined TLV set.
++			 * Treat anything unrecognised as a malformed 
++			 * container so the engine falls back to
++			 * the previously learned MAP-E state instead
++			 * of silently building partial state from
++			 * data we cannot validate.
++			 */
++			log_warnx("%s: unexpected S46 MAP-E sub-option: "
++			    "%u", __func__, opt_hdr.code);
++			return (-1);
++		}
++
++		p += opt_hdr.len;
++		len -= opt_hdr.len;
++	}
++	if (len != 0 || !nmape.br_valid || nmape.rule_count == 0) {
++		log_warnx("%s: incomplete S46 MAP-E container", __func__);
++		return (-1);
++	}
++
++	nmape.valid = 1;
++	*mape = nmape;
++	return (0);
++}
++
++static int
++parse_s46_rule(uint8_t *p, size_t len, struct s46_rule *rule)
++{
++	struct s46_rule		 nrule;
++	size_t			 prefix6_bytes;
++
++	memset(&nrule, 0, sizeof(nrule));
++	if (len < 8) {
++		log_warnx("%s: S46 rule too short", __func__);
++		return (-1);
++	}
++
++	nrule.flags = p[0];
++	nrule.ea_len = p[1];
++	nrule.prefix4_len = p[2];
++	memcpy(&nrule.prefix4, p + 3, sizeof(nrule.prefix4));
++	nrule.prefix6_len = p[7];
++	p += 8;
++	len -= 8;
++
++	if (nrule.ea_len > 48 || nrule.prefix4_len > 32 ||
++	    nrule.prefix6_len > 128) {
++		log_warnx("%s: invalid S46 rule parameters", __func__);
++		return (-1);
++	}
++
++	prefix6_bytes = (nrule.prefix6_len + 7) / 8;
++	if (len < prefix6_bytes) {
++		log_warnx("%s: truncated S46 IPv6 prefix", __func__);
++		return (-1);
++	}
++	memcpy(&nrule.prefix6, p, prefix6_bytes);
++	p += prefix6_bytes;
++	len -= prefix6_bytes;
++
++	mask_in_addr(&nrule.prefix4, nrule.prefix4_len);
++	mask_in6_addr(&nrule.prefix6, nrule.prefix6_len);
++
++	if (parse_s46_rule_options(p, len, &nrule) != 0)
++		return (-1);
++
++	nrule.valid = 1;
++	*rule = nrule;
++	return (0);
++}
++
++static int
++parse_s46_rule_options(uint8_t *p, size_t len, struct s46_rule *rule)
++{
++	struct dhcp_option_hdr	 opt_hdr;
++	uint16_t		 psid;
++
++	while (len >= sizeof(struct dhcp_option_hdr)) {
++		memcpy(&opt_hdr, p, sizeof(opt_hdr));
++		opt_hdr.code = ntohs(opt_hdr.code);
++		opt_hdr.len = ntohs(opt_hdr.len);
++		p += sizeof(opt_hdr);
++		len -= sizeof(opt_hdr);
++
++		if (len < opt_hdr.len) {
++			log_warnx("%s: malformed S46 rule option", __func__);
++			return (-1);
++		}
++
++		switch (opt_hdr.code) {
++		case DHO_S46_PORTPARAMS:
++			if (opt_hdr.len != 4) {
++				log_warnx("%s: invalid S46 portparams length: "
++				    "%u", __func__, opt_hdr.len);
++				return (-1);
++			}
++			if (rule->portparams.valid) {
++				log_warnx("%s: duplicate S46 portparams",
++				    __func__);
++				return (-1);
++			}
++			if (p[0] > 15 || p[1] > 16 || p[0] + p[1] > 16) {
++				log_warnx("%s: invalid S46 portparams", __func__);
++				return (-1);
++			}
++			memcpy(&psid, p + 2, sizeof(psid));
++			rule->portparams.offset = p[0];
++			rule->portparams.psid_len = p[1];
++			/*
++			 * RFC 7597 / RFC 7598: when S46_PORTPARAMS is
++			 * absent, the CE derives PSID-len from
++			 * EA-len - (32 - rule_ipv4_prefix_len). When
++			 * the option is present with PSID-len = 0,
++			 * the BR has explicitly told us the PSID is
++			 * empty for this rule (one IPv4 address per
++			 * prefix4 host bits, no port-set sharing)
++			 * and the encoded PSID field is unused.
++			 * Cosmote's deployment uses this shape.
++			 * The two cases must stay distinguishable for
++			 * the future MAP-E derivation code, which is
++			 * why portparams.valid is recorded separately
++			 * from rule.valid even when psid_len == 0.
++			 */
++			if (p[1] == 0)
++				rule->portparams.psid = 0;
++			else
++				rule->portparams.psid = ntohs(psid) >>
++				    (16 - p[1]);
++			rule->portparams.valid = 1;
++			break;
++		default:
++			log_warnx("%s: unexpected S46 rule sub-option: "
++			    "%u", __func__, opt_hdr.code);
++			return (-1);
++		}
++
++		p += opt_hdr.len;
++		len -= opt_hdr.len;
++	}
++	if (len != 0) {
++		log_warnx("%s: trailing malformed S46 rule option", __func__);
++		return (-1);
++	}
++	return (0);
++}
+Index: usr.sbin/dhcp6leasectl/dhcp6leasectl.c
+===================================================================
+RCS file: /cvs/src/usr.sbin/dhcp6leasectl/dhcp6leasectl.c,v
+diff -u -p usr.sbin/dhcp6leasectl/dhcp6leasectl.c
+--- usr.sbin/dhcp6leasectl/dhcp6leasectl.c	Fri May 15 12:26:12 2026
++++ usr.sbin/dhcp6leasectl/dhcp6leasectl.c	Fri May 15 12:26:13 2026
+@@ -48,6 +48,7 @@
+ 
+ __dead void	 usage(void);
+ void		 show_interface_msg(struct ctl_engine_info *);
++void		 show_mape_msg(struct s46_mape *);
+ 
+ struct imsgbuf	*ibuf;
+ 
+@@ -234,5 +235,56 @@ show_interface_msg(struct ctl_engine_info *cei)
+ 		} else
+ 			printf("\tlease %lld second%s\n", s, s > 1 ? "s" : "");
+ 
++	}
++
++	show_mape_msg(&cei->mape);
++}
++
++void
++show_mape_msg(struct s46_mape *mape)
++{
++	char	 brbuf[INET6_ADDRSTRLEN], prefix4buf[INET_ADDRSTRLEN];
++	char	 prefix6buf[INET6_ADDRSTRLEN];
++	size_t	 i, rule_count;
++
++	if (!mape->valid)
++		return;
++
++	printf("\tMAP-E\n");
++
++	if (mape->br_valid) {
++		if (inet_ntop(AF_INET6, &mape->br, brbuf, sizeof(brbuf)) ==
++		    NULL)
++			strlcpy(brbuf, "invalid", sizeof(brbuf));
++		printf("\t\tBR: %s\n", brbuf);
++	}
++
++	rule_count = mape->rule_count;
++	if (rule_count > MAX_S46_RULES)
++		rule_count = MAX_S46_RULES;
++
++	for (i = 0; i < rule_count; i++) {
++		if (!mape->rules[i].valid)
++			continue;
++
++		if (inet_ntop(AF_INET, &mape->rules[i].prefix4, prefix4buf,
++		    sizeof(prefix4buf)) == NULL)
++			strlcpy(prefix4buf, "invalid", sizeof(prefix4buf));
++		if (inet_ntop(AF_INET6, &mape->rules[i].prefix6, prefix6buf,
++		    sizeof(prefix6buf)) == NULL)
++			strlcpy(prefix6buf, "invalid", sizeof(prefix6buf));
++
++		printf("\t\trule: flags %u ea-len %u %s/%u %s/%u\n",
++		    mape->rules[i].flags, mape->rules[i].ea_len, prefix4buf,
++		    mape->rules[i].prefix4_len, prefix6buf,
++		    mape->rules[i].prefix6_len);
++
++		if (!mape->rules[i].portparams.valid)
++			continue;
++
++		printf("\t\tportparams: offset %u psid-len %u psid %u\n",
++		    mape->rules[i].portparams.offset,
++		    mape->rules[i].portparams.psid_len,
++		    mape->rules[i].portparams.psid);
+ 	}
+ }
+Index: usr.sbin/dhcp6leasectl/dhcp6leasectl.8
+===================================================================
+RCS file: /cvs/src/usr.sbin/dhcp6leasectl/dhcp6leasectl.8,v
+diff -u -p usr.sbin/dhcp6leasectl/dhcp6leasectl.8
+--- usr.sbin/dhcp6leasectl/dhcp6leasectl.8	Fri May 15 12:26:12 2026
++++ usr.sbin/dhcp6leasectl/dhcp6leasectl.8	Fri May 15 12:26:13 2026
+@@ -41,6 +41,9 @@ The following options are available:
+ List the configured lease on
+ .Ar interface
+ instead of requesting a new lease.
++The output includes delegated prefixes and, when present, MAP-E
++Softwire46 parameters learned by
++.Xr dhcp6leased 8 .
+ .It Fl s Ar socket
+ Use
+ .Ar socket
