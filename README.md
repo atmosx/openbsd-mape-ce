@@ -1,65 +1,166 @@
-# OpenBSD MAP-E CE
+# OpenBSD MAP-E CE support
 
-This repository contains a collection of scripts and guides to enable MAP-E support to [OpenBSD](https://www.openbsd.org/).
-MAP-E, described in detailed in [RFC7597](https://datatracker.ietf.org/doc/html/rfc7597), is a common technology used by ISPs adopting IPv6. The protocol encapsulates IPv4 traffic into IPv6.
+This repository contains a collection of patches and scripts to add **Customer Edge Mapping of Address and Port with Encapsulation**, widely known as MAP-E CE, support to [OpenBSD](https://www.openbsd.org/) 7.8.
+
+## Status
+
+This should be considered an experimental project. Don't rely on this implementation for production use.
+
+## What is MAP-E CE?
 
 ![MAP-E graph](images/map-e-ce.jpeg)
 
-## What works right now?
+MAP-E ([RFC7597](https://datatracker.ietf.org/doc/html/rfc7597)) is a somewhat new technology spreading fast among ISPs. The key characteristic is that it encapsulates IPv4 traffic into IPv6.
 
-A [packet filter patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has been made publicly available since 2021. Applying the patch allows enables the port-mapping. Once the system's packet filter has been patched, use the perl scripts to bring up a `gif0` interface.
+With MAP-E, multiple users share the same IPv4. On the bright side, users get real IPv6 routes.
 
-## Howto
+> For reasons _unknown_ to me, my ISP doesn't assign static IPv6 addresses. It's a shame.
 
-Install the non-metrics scripts:
+## 1. OpenBSD setup
 
-```sh
+The setup requires the following:
+
+1. [openbsd-pf-map-e-ce](https://github.com/toru-mano/openbsd-pf-map-e-ce) adds NAT support to packet filter (pf).
+2. `dhcp6leased` adds support for MAP-E CE to the system components.
+3. Some basic networking configuration
+4. A companion script to automate the network setup process
+
+The [packet filter patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has been made publicly available since 2021. Applying the patch enables port mapping. Once the system's packet filter has been patched, use the Perl scripts to bring up a `gif0` interface.
+
+Install the following packages and create the interface:
+
+```ksh
+doas pkg_add git p5-IO-KQueue
+echo 'create\nup' > /etc/hostname.gif0
+```
+
+Download and extract the source code:
+
+```ksh
+cd /tmp
+ftp https://cdn.openbsd.org/pub/OpenBSD/7.8/src.tar.gz
+ftp https://cdn.openbsd.org/pub/OpenBSD/7.8/sys.tar.gz
+cd /usr/src
+doas tar xzf /tmp/src.tar.gz
+cd /usr
+doas tar xzf /tmp/sys.tar.gz
+```
+
+Clone the repository to the system:
+
+```ksh
+cd /usr/local/src
+doas git clone https://git.sr.ht/~atmosx/openbsd-mape-ce
+cd openbsd-mape-ce
+```
+
+## 2. Patch the system
+
+Now we have to apply the patches:
+
+```ksh
+cd /usr/src
+doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/pf-map-e-ce/mape78.patch
+doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/dhcp6leased-mape-softwire46-openbsd78.patch
+```
+
+> **NOTE**: Ignore the patches in the `split/` directory. These are an exact copy of `dhcp6leased-mape-softwire46-openbsd78.patch` split into scoped chunks.
+
+Now let's rebuild the kernel and reboot:
+
+```ksh
+cd /usr/src/sys/arch/amd64/conf
+doas config GENERIC.MP
+cd ../compile/GENERIC.MP
+doas make clean
+doas make -j$(sysctl -n hw.ncpu)
+doas make install
+doas reboot
+```
+
+Now let's rebuild the userland tools:
+
+```ksh
+cd /usr/src/sbin/pfctl
+doas make obj
+doas make
+doas make install
+
+cd /usr/src/sbin/dhcp6leased
+doas make obj
+doas make
+doas make install
+
+cd /usr/src/usr.sbin/dhcp6leasectl
+doas make obj
+doas make
 doas make install
 ```
 
-The script `mape-derive` extracts `dhcp6leased` MAP-E values from `/var/db/dhcp6leased/$LEASE_IF`: `ia_pd`, `mape_br`, `mape_rule`, and `mape_portparams`.
+Enable `mape` request in `/etc/dhcp6leased.conf`:
 
-If the lease file is not readable it falls back to `dhcp6leasectl -l "$LEASE_IF"`. Values not supplied by DHCP, such as `WAN_IF`, `GIF_IF`, `LAN_NET`, `GIF_MTU`, and `PF_ANCHOR_FILE`, still come from `/etc/mape.conf`.
-
-Bring MAP-E up manually:
-
-```sh
-doas /usr/local/sbin/mape-up
+```ksh
+request prefix delegation on pppoe0 for { em1/64 em2/64 em3/64 }
+request mape on pppoe0 # enable MAPE on this interface
 ```
 
-To re-apply MAP-E automatically when the DHCP MAP-E values change, run the
-watcher as a daemon:
+Then restart the daemon and check if MAP-E has been successfully enabled:
 
-```sh
-doas /usr/local/sbin/mape-watch -d
+```ksh
+rcctl restart dhcp6leased
+dhcp6leasectl -l pppoe0
+
+pppoe0 [Bound]
+        IA_PD 0: 2a02:x:x:x::/56
+        lease 7 days
+        MAP-E
+                BR: 2a02:x::406
+                rule: flags 0 ea-len 14 80.x.x.0/24 2a02:x:x::/42
+                portparams: offset 6 psid-len 0 psid 0
 ```
 
-On OpenBSD, `mape-watch` uses `kqueue(2)` through the optional `IO::KQueue`
-Perl module when it can watch `LEASE_FILE`. Without that module, or when the
-lease file is unavailable and only `dhcp6leasectl` can be queried, it falls back
-to polling every 30 seconds. Force polling with `-p`, or change the interval
-with `-i seconds`.
+Now proceed by installing the `mape` Perl scripts:
 
-Enable the daemon at boot:
+```ksh
+cd /usr/local/src/openbsd-mape-ce
+doas make install
+```
 
-```sh
+Adjust `/etc/mape.conf`. Make sure the following variables match your system's setup: `WAN_IF`, `LEASE_IF`, `LAN_NET`, `GIF_IF`, `LEASE_FILE`, and `PF_ANCHOR_FILE`.
+
+Enable the `mape_watch` service:
+
+```ksh
 doas rcctl enable mape_watch
 doas rcctl start mape_watch
 doas rcctl check mape_watch
 ```
 
-The watcher logs to syslog with `info`, `warn`, and `debug` levels. Set
-`MAPE_LOG_LEVEL="debug"` in `/etc/mape.conf` while troubleshooting, or pass
-`-l debug` when running it by hand.
+Check the `gif0` interface and packet filter `mape` anchor. You should see similar output:
 
-For debugging, keep it in the foreground:
+```ksh
+ifconfig gif0
 
-```sh
-doas /usr/local/sbin/mape-watch -f
+gif0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1452
+        index 11 priority 0 llprio 3
+        encap: txprio payload rxprio payload
+        groups: gif egress
+        tunnel: inet6 2a02... --> 2a02... ttl 64 nodf ecn
+        inet 87.x.x.x --> 0.0.0.1 netmask 0xffffffff
+
+doas pfctl -a mape -sr
+
+match out on gif0 inet from (gif0) to any nat-to (gif0) round-robin map-e-portset 6/6/63
+match out on gif0 inet from 192.168.121.0/24 to any nat-to (gif0) round-robin map-e-portset 6/6/63
+match out on gif0 inet from 192.168.122.0/24 to any nat-to (gif0) round-robin map-e-portset 6/6/63
+match out on gif0 inet from 192.168.123.0/24 to any nat-to (gif0) round-robin map-e-portset 6/6/63
+pass out quick on pppoe0 inet6 proto ipencap from 2a02... to 2a02...
+pass in quick on pppoe0 inet6 proto ipencap from 2a02... to 2a02...
+pass out quick on gif0 inet from (gif0) to any flags S/SA
+pass in quick on gif0 inet from any to (gif0) flags S/SA
 ```
 
-For cron-style polling instead of a persistent process:
+## Helping & Testing
 
-```sh
-* * * * * /usr/local/sbin/mape-watch -1
-```
+Help and testing are more than welcome! If you'd like to help with testing, feel free to send email, requests, questions, and patches to the project's mailing list: `~atmosx/openbsd-mape-ce@lists.sr.ht`
+
