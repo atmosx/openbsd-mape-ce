@@ -1,0 +1,148 @@
+.\" Copyright (c) 2026 Panagiotis Atmatzidis <atma@convalesco.org>
+.\"
+.\" Permission to use, copy, modify, and/or distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd May 16, 2026
+.Dt MAPED 8
+.Os
+.Sh NAME
+.Nm maped
+.Nd configure MAP-E Customer Edge state
+.Sh SYNOPSIS
+.Nm
+.Op Fl 1dfp
+.Op Fl i Ar seconds
+.Op Fl l Ar level
+.Op Ar config
+.Sh DESCRIPTION
+.Nm
+watches DHCPv6 MAP-E lease state and configures the local Customer Edge
+runtime.
+When lease data changes, or when the configured runtime state is missing,
+.Nm
+runs
+.Pa /usr/local/libexec/maped/maped-up
+to configure the
+.Xr gif 4
+interface,
+.Xr pf 4
+anchor, and IPv4 default route.
+.Pp
+The helper programs are installed under
+.Pa /usr/local/libexec/maped
+and are not intended as the primary user interface.
+.Pp
+The options are as follows:
+.Bl -tag -width Ds
+.It Fl 1
+Run once and exit.
+.It Fl d
+Run as a daemon.
+.It Fl f
+Run in the foreground.
+.It Fl i Ar seconds
+Set the polling or health-check interval.
+The default is 30 seconds.
+.It Fl l Ar level
+Set the log level.
+Valid values are
+.Cm debug ,
+.Cm info ,
+and
+.Cm warn .
+.It Fl p
+Force polling instead of
+.Xr kqueue 2 .
+.El
+.Pp
+If
+.Ar config
+is not specified,
+.Nm
+reads
+.Pa /etc/maped.conf .
+.Sh CONFIGURATION
+The configuration file is a
+.Xr sh 1
+file read by the helper programs.
+The following variables are commonly set:
+.Bl -tag -width PF_ANCHOR_FILE
+.It Va WAN_IF
+IPv6 WAN interface.
+.It Va LEASE_IF
+Interface passed to
+.Xr dhcp6leasectl 8 .
+.It Va LAN_NET
+IPv4 LAN network or table expression used in generated
+.Xr pf 4
+rules.
+.It Va GIF_IF
+.Xr gif 4
+interface to create.
+.It Va GIF_MTU
+MTU assigned to
+.Va GIF_IF .
+.It Va LEASE_FILE
+Optional
+.Xr dhcp6leased 8
+lease file to watch.
+.It Va PF_ANCHOR_FILE
+Path used to store the generated
+.Xr pf 4
+anchor.
+.It Va MAPED_UP
+Runtime configuration helper.
+.It Va MAPED_DERIVE
+MAP-E parameter derivation helper.
+.It Va MAPE_STATE_DIR
+Directory used for daemon state.
+.It Va MAPE_PEER_IPV4
+Peer address used on the
+.Xr gif 4
+interface.
+.It Va MAPE_LOG_LEVEL
+Log level for
+.Nm .
+.El
+.Sh FILES
+.Bl -tag -width /usr/local/libexec/maped/maped-derive -compact
+.It Pa /etc/maped.conf
+Configuration file.
+.It Pa /etc/rc.d/maped
+Daemon control script.
+.It Pa /usr/local/sbin/maped
+Daemon.
+.It Pa /usr/local/libexec/maped/maped-up
+Runtime configuration helper.
+.It Pa /usr/local/libexec/maped/maped-down
+Runtime teardown helper.
+.It Pa /usr/local/libexec/maped/maped-derive
+MAP-E parameter derivation helper.
+.It Pa /var/db/mape/lease.state
+Default lease state cache.
+.It Pa /etc/pf.anchors/mape
+Default generated
+.Xr pf 4
+anchor file.
+.El
+.Sh SEE ALSO
+.Xr sh 1 ,
+.Xr gif 4 ,
+.Xr pf 4 ,
+.Xr pf.conf 5 ,
+.Xr dhcp6leasectl 8 ,
+.Xr dhcp6leased 8 ,
+.Xr pfctl 8 ,
+.Xr rcctl 8
+.Sh AUTHORS
+.An Panagiotis Atmatzidis Aq Mt atma@convalesco.org

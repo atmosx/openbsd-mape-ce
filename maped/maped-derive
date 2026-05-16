@@ -1,10 +1,25 @@
 #!/usr/bin/perl
+#
+# Copyright (c) 2026 Panagiotis Atmatzidis <atma@convalesco.org>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
 use strict;
 use warnings;
 use Socket qw(AF_INET AF_INET6 inet_pton inet_ntop);
 use Math::BigInt;
 
-sub diex { die "mape-derive: @_\n"; }
+sub diex { die "maped-derive: @_\n"; }
 
 sub trim {
 	my ($s) = @_;
@@ -97,7 +112,7 @@ sub find_pd_prefix {
 		}
 	}
 
-	diex("could not find delegated prefix; set PD_PREFIX=.../... in /etc/mape.conf for testing");
+	diex("could not find delegated prefix; set PD_PREFIX=.../... in /etc/maped.conf for testing");
 }
 
 sub parse_dhcp6leased_text {

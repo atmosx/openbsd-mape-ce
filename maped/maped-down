@@ -3,7 +3,7 @@ set -eu
 
 [ "$(id -u)" -eq 0 ] || exec doas "$0" "$@"
 
-CONF="${1:-/etc/mape.conf}"
+CONF="${1:-/etc/maped.conf}"
 . "$CONF"
 
 route delete -inet default >/dev/null 2>&1 || true

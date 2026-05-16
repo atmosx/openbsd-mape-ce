@@ -1,4 +1,19 @@
 #!/usr/bin/perl
+#
+# Copyright (c) 2026 Panagiotis Atmatzidis <atma@convalesco.org>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
 use strict;
 use warnings;
 use Getopt::Std;
@@ -16,19 +31,19 @@ my $foreground = $opt{f} ? 1 : 0;
 my $force_poll = $opt{p} ? 1 : 0;
 my $interval = defined $opt{i} ? $opt{i} : 30;
 my $log_level = lc($opt{l} // "");
-my $conf = $ARGV[0] || "/etc/mape.conf";
+my $conf = $ARGV[0] || "/etc/maped.conf";
 
 usage() if $daemon && $foreground;
 usage() if $interval !~ /^\d+$/ || $interval < 1;
 
 if ($> != 0) {
-	exec "doas", $0, @orig_argv or die "mape-watch: cannot exec doas: $!\n";
+	exec "doas", $0, @orig_argv or die "maped: cannot exec doas: $!\n";
 }
 
 my %conf = read_conf($conf);
 my $state_dir = $conf{MAPE_STATE_DIR} || "/var/db/mape";
 my $state_file = $conf{MAPE_STATE_FILE} || "$state_dir/lease.state";
-my $mape_up = $conf{MAPE_UP} || "/usr/local/sbin/mape-up";
+my $maped_up = $conf{MAPED_UP} || "/usr/local/libexec/maped/maped-up";
 my $dhcp6leasectl = $conf{DHCP6LEASECTL} || "dhcp6leasectl";
 my %log_rank = (debug => 0, info => 1, warn => 2);
 $log_level = lc($conf{MAPE_LOG_LEVEL} || "info") if $log_level eq "";
@@ -39,10 +54,10 @@ make_path($state_dir) unless -d $state_dir;
 
 if ($daemon) {
 	daemonize();
-	openlog("mape-watch", "pid", LOG_DAEMON);
+	openlog("maped", "pid", LOG_DAEMON);
 	log_info(startup_message());
 } else {
-	openlog("mape-watch", "pid,perror", LOG_DAEMON);
+	openlog("maped", "pid,perror", LOG_DAEMON);
 }
 
 run_once();
@@ -54,7 +69,7 @@ while (1) {
 }
 
 sub usage {
-	print STDERR "usage: mape-watch [-1] [-d|-f] [-p] [-i seconds] [-l info|warn|debug] [config]\n";
+	print STDERR "usage: maped [-1] [-d|-f] [-p] [-i seconds] [-l info|warn|debug] [config]\n";
 	exit 2;
 }
 
@@ -66,23 +81,23 @@ sub startup_message {
 }
 
 sub daemonize {
-	chdir "/" or die "mape-watch: chdir /: $!\n";
-	defined(my $pid = fork) or die "mape-watch: fork: $!\n";
+	chdir "/" or die "maped: chdir /: $!\n";
+	defined(my $pid = fork) or die "maped: fork: $!\n";
 	exit 0 if $pid;
-	setsid() or die "mape-watch: setsid: $!\n";
-	defined($pid = fork) or die "mape-watch: fork: $!\n";
+	setsid() or die "maped: setsid: $!\n";
+	defined($pid = fork) or die "maped: fork: $!\n";
 	exit 0 if $pid;
 
-	open STDIN, "<", "/dev/null" or die "mape-watch: stdin: $!\n";
-	open STDOUT, ">", "/dev/null" or die "mape-watch: stdout: $!\n";
-	open STDERR, ">", "/dev/null" or die "mape-watch: stderr: $!\n";
+	open STDIN, "<", "/dev/null" or die "maped: stdin: $!\n";
+	open STDOUT, ">", "/dev/null" or die "maped: stdout: $!\n";
+	open STDERR, ">", "/dev/null" or die "maped: stderr: $!\n";
 }
 
 sub read_conf {
 	my ($path) = @_;
 	my %c;
 
-	open my $fh, "<", $path or die "mape-watch: cannot read $path: $!\n";
+	open my $fh, "<", $path or die "maped: cannot read $path: $!\n";
 	while (my $line = <$fh>) {
 		chomp $line;
 		$line =~ s/^\s+//;
@@ -115,22 +130,22 @@ sub run_once {
 	}
 
 	if (!defined $old || $old ne $snapshot) {
-		log_info("MAP-E lease data changed; running $mape_up");
+		log_info("MAP-E lease data changed; running $maped_up");
 		log_debug("new lease state:\n$snapshot");
 	} else {
 		log_info("MAP-E lease data unchanged but runtime needs repair: $runtime_reason");
 	}
-	my ($rc, $out) = run_command($mape_up, $conf);
+	my ($rc, $out) = run_command($maped_up, $conf);
 	if ($rc == 0) {
 		write_state($snapshot);
 		log_info("MAP-E reconfiguration complete");
-		log_debug("mape-up output:\n$out") if $out ne "";
+		log_debug("maped-up output:\n$out") if $out ne "";
 		return;
 	}
 
 	my $exit = $rc == -1 ? "exec failed" : "exit " . ($rc >> 8);
 	log_warn("MAP-E reconfiguration failed: $exit");
-	log_warn("mape-up output:\n$out") if $out ne "";
+	log_warn("maped-up output:\n$out") if $out ne "";
 }
 
 sub runtime_reconfigure_reason {
@@ -322,10 +337,10 @@ sub read_state {
 sub write_state {
 	my ($snapshot) = @_;
 	my $tmp = "$state_file.$$";
-	open my $fh, ">", $tmp or die "mape-watch: cannot write $tmp: $!\n";
+	open my $fh, ">", $tmp or die "maped: cannot write $tmp: $!\n";
 	print {$fh} $snapshot;
-	close $fh or die "mape-watch: cannot close $tmp: $!\n";
-	rename $tmp, $state_file or die "mape-watch: cannot rename $tmp to $state_file: $!\n";
+	close $fh or die "maped: cannot close $tmp: $!\n";
+	rename $tmp, $state_file or die "maped: cannot rename $tmp to $state_file: $!\n";
 }
 
 sub log_debug {

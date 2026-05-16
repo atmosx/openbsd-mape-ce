@@ -3,12 +3,12 @@ set -eu
 
 [ "$(id -u)" -eq 0 ] || exec doas "$0" "$@"
 
-CONF="${1:-/etc/mape.conf}"
+CONF="${1:-/etc/maped.conf}"
 . "$CONF"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-DERIVE_COMMAND="${DERIVE_COMMAND:-/usr/local/sbin/mape-derive}"
-[ -x "$DERIVE_COMMAND" ] || DERIVE_COMMAND="$SCRIPT_DIR/mape-derive"
+DERIVE_COMMAND="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
+[ -x "$DERIVE_COMMAND" ] || DERIVE_COMMAND="$SCRIPT_DIR/maped-derive"
 
 export PD_PREFIX PD_IF LEASE_FILE LEASE_IF WAN_IF DHCP6LEASECTL
 export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_OFFSET BR_IPV6

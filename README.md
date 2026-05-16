@@ -1,31 +1,21 @@
 # OpenBSD MAP-E CE support
 
-This repository contains a collection of patches and scripts to add **Customer Edge Mapping of Address and Port with Encapsulation**, widely known as MAP-E CE, support to [OpenBSD](https://www.openbsd.org/) 7.8.
+This repository contains a collection of patches and scripts to add **Customer Edge Mapping of Address and Port with Encapsulation**, widely known as MAP-E CE ([RFC7597](https://datatracker.ietf.org/doc/html/rfc7597)), support to [OpenBSD](https://www.openbsd.org/) 7.8.
 
 ## Status
 
-This should be considered an experimental project. Don't rely on this implementation for production use.
+This is an experimental project. Do not rely on this implementation for production use.
 
-## What is MAP-E CE?
+## 1. Setup
 
-![MAP-E graph](images/map-e-ce.jpeg)
+The following are required:
 
-MAP-E ([RFC7597](https://datatracker.ietf.org/doc/html/rfc7597)) is a somewhat new technology spreading fast among ISPs. The key characteristic is that it encapsulates IPv4 traffic into IPv6.
+1. [openbsd-pf-map-e-ce](https://github.com/toru-mano/openbsd-pf-map-e-ce) adds MAP-E NAT support to `pf(4)`.
+2. `dhcp6leased(8)` adds support for MAP-E CE to the base system.
+3. Basic networking configuration.
+4. A companion application to automate the network setup process.
 
-With MAP-E, multiple users share the same IPv4. On the bright side, users get real IPv6 routes.
-
-> For reasons _unknown_ to me, my ISP doesn't assign static IPv6 addresses. It's a shame.
-
-## 1. OpenBSD setup
-
-The setup requires the following:
-
-1. [openbsd-pf-map-e-ce](https://github.com/toru-mano/openbsd-pf-map-e-ce) adds NAT support to packet filter (pf).
-2. `dhcp6leased` adds support for MAP-E CE to the system components.
-3. Some basic networking configuration
-4. A companion script to automate the network setup process
-
-The [packet filter patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has been made publicly available since 2021. Applying the patch enables port mapping. Once the system's packet filter has been patched, use the Perl scripts to bring up a `gif0` interface.
+The [packet filter patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has been publicly available since 2021. Applying the patch enables port mapping in MAP-E. Once `pf(4)` has been patched, use the Perl application to bring up a `gif(4)` interface.
 
 Install the following packages and create the interface:
 
@@ -46,27 +36,21 @@ cd /usr
 doas tar xzf /tmp/sys.tar.gz
 ```
 
-Clone the repository to the system:
+## 2. Patch the system
+
+Clone the repository and apply the patches:
 
 ```ksh
 cd /usr/local/src
 doas git clone https://git.sr.ht/~atmosx/openbsd-mape-ce
 cd openbsd-mape-ce
-```
-
-## 2. Patch the system
-
-Now we have to apply the patches:
-
-```ksh
-cd /usr/src
 doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/pf-map-e-ce/mape78.patch
 doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/dhcp6leased-mape-softwire46-openbsd78.patch
 ```
 
 > **NOTE**: Ignore the patches in the `split/` directory. These are an exact copy of `dhcp6leased-mape-softwire46-openbsd78.patch` split into scoped chunks.
 
-Now let's rebuild the kernel and reboot:
+Rebuild the kernel and reboot:
 
 ```ksh
 cd /usr/src/sys/arch/amd64/conf
@@ -78,7 +62,7 @@ doas make install
 doas reboot
 ```
 
-Now let's rebuild the userland tools:
+Rebuild the userland tools:
 
 ```ksh
 cd /usr/src/sbin/pfctl
@@ -97,14 +81,14 @@ doas make
 doas make install
 ```
 
-Enable `mape` request in `/etc/dhcp6leased.conf`:
+Enable the `mape` request in `/etc/dhcp6leased.conf`:
 
 ```ksh
 request prefix delegation on pppoe0 for { em1/64 em2/64 em3/64 }
 request mape on pppoe0 # enable MAPE on this interface
 ```
 
-Then restart the daemon and check if MAP-E has been successfully enabled:
+Restart `dhcp6leased(8)` and verify that MAP-E has been enabled:
 
 ```ksh
 rcctl restart dhcp6leased
@@ -119,24 +103,28 @@ pppoe0 [Bound]
                 portparams: offset 6 psid-len 0 psid 0
 ```
 
-Now proceed by installing the `mape` Perl scripts:
+Install `maped`:
 
 ```ksh
 cd /usr/local/src/openbsd-mape-ce
 doas make install
 ```
 
-Adjust `/etc/mape.conf`. Make sure the following variables match your system's setup: `WAN_IF`, `LEASE_IF`, `LAN_NET`, `GIF_IF`, `LEASE_FILE`, and `PF_ANCHOR_FILE`.
+This installs `maped` in `/usr/local/sbin` and its helpers in `/usr/local/libexec/maped`.
 
-Enable the `mape_watch` service:
+Edit `/etc/maped.conf`. Set `WAN_IF`, `LEASE_IF`, `LAN_NET`, `GIF_IF`, `LEASE_FILE`, and `PF_ANCHOR_FILE` to match the local system.
+
+Enable the `maped` service:
 
 ```ksh
-doas rcctl enable mape_watch
-doas rcctl start mape_watch
-doas rcctl check mape_watch
+doas rcctl enable maped
+doas rcctl start maped
+doas rcctl check maped
 ```
 
-Check the `gif0` interface and packet filter `mape` anchor. You should see similar output:
+See `maped(8)` for command-line options, files, and helper paths.
+
+Check the `gif0` interface and the `mape` anchor. The output should resemble:
 
 ```ksh
 ifconfig gif0
@@ -160,7 +148,6 @@ pass out quick on gif0 inet from (gif0) to any flags S/SA
 pass in quick on gif0 inet from any to (gif0) flags S/SA
 ```
 
-## Helping & Testing
+## Help and testing
 
-Help and testing are more than welcome! If you'd like to help with testing, feel free to send email, requests, questions, and patches to the project's mailing list: `~atmosx/openbsd-mape-ce@lists.sr.ht`
-
+Reports, questions and patches are welcome on the project's mailing list: `~atmosx/openbsd-mape-ce@lists.sr.ht`.
