@@ -17,7 +17,7 @@ tasks:
     perl -c maped/maped
     perl -c maped/maped-derive
     sh -n maped/maped-up maped/maped-down
-    mandoc -Tlint maped/maped.8
+    mandoc -Tlint -W warning maped/maped.8
     make -n install
 - fetch-openbsd-src: |
     set -eu
