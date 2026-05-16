@@ -41,12 +41,12 @@ if ($> != 0) {
 }
 
 my %conf = read_conf($conf);
-my $state_dir = $conf{MAPE_STATE_DIR} || "/var/db/mape";
-my $state_file = $conf{MAPE_STATE_FILE} || "$state_dir/lease.state";
+my $state_dir = $conf{MAPED_STATE_DIR} || $conf{MAPE_STATE_DIR} || "/var/db/maped";
+my $state_file = $conf{MAPED_STATE_FILE} || $conf{MAPE_STATE_FILE} || "$state_dir/lease.state";
 my $maped_up = $conf{MAPED_UP} || "/usr/local/libexec/maped/maped-up";
 my $dhcp6leasectl = $conf{DHCP6LEASECTL} || "dhcp6leasectl";
 my %log_rank = (debug => 0, info => 1, warn => 2);
-$log_level = lc($conf{MAPE_LOG_LEVEL} || "info") if $log_level eq "";
+$log_level = lc($conf{MAPED_LOG_LEVEL} || $conf{MAPE_LOG_LEVEL} || "info") if $log_level eq "";
 usage() unless exists $log_rank{$log_level};
 my $have_kqueue = $force_poll ? 0 : load_kqueue();
 

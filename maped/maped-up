@@ -9,6 +9,7 @@ CONF="${1:-/etc/maped.conf}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DERIVE_COMMAND="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
 [ -x "$DERIVE_COMMAND" ] || DERIVE_COMMAND="$SCRIPT_DIR/maped-derive"
+MAPED_PEER_IPV4="${MAPED_PEER_IPV4:-${MAPE_PEER_IPV4:-0.0.0.1}}"
 
 export PD_PREFIX PD_IF LEASE_FILE LEASE_IF WAN_IF DHCP6LEASECTL
 export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_OFFSET BR_IPV6
@@ -39,7 +40,7 @@ fi
 
 ifconfig "$GIF_IF" create
 ifconfig "$GIF_IF" tunnel "$CE_IPV6" "$BR_IPV6"
-ifconfig "$GIF_IF" inet "$MAPE_IPV4" "$MAPE_PEER_IPV4" netmask 255.255.255.255
+ifconfig "$GIF_IF" inet "$MAPE_IPV4" "$MAPED_PEER_IPV4" netmask 255.255.255.255
 ifconfig "$GIF_IF" mtu "$GIF_MTU"
 ifconfig "$GIF_IF" up
 
@@ -64,7 +65,7 @@ mv "$PF_ANCHOR_TMP" "$PF_ANCHOR_FILE"
 trap - EXIT
 
 route delete -inet default >/dev/null 2>&1 || true
-route add -inet default -ifp "$GIF_IF" "$MAPE_PEER_IPV4"
+route add -inet default -ifp "$GIF_IF" "$MAPED_PEER_IPV4"
 
 echo "MAP-E is up"
 ifconfig "$GIF_IF"
