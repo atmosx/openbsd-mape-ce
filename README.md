@@ -34,7 +34,6 @@ ftp https://cdn.openbsd.org/pub/OpenBSD/7.8/src.tar.gz
 ftp https://cdn.openbsd.org/pub/OpenBSD/7.8/sys.tar.gz
 cd /usr/src
 doas tar xzf /tmp/src.tar.gz
-cd /usr
 doas tar xzf /tmp/sys.tar.gz
 ```
 
@@ -43,9 +42,10 @@ doas tar xzf /tmp/sys.tar.gz
 Clone the repository and apply the patches:
 
 ```ksh
+doas mkdir /usr/local/src
 cd /usr/local/src
 doas git clone https://git.sr.ht/~atmosx/openbsd-mape-ce
-cd openbsd-mape-ce
+cd /usr/src
 doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/pf-map-e-ce/mape78.patch
 doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/dhcp6leased-mape-softwire46-openbsd78.patch
 ```
