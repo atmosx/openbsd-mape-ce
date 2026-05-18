@@ -43,8 +43,12 @@ if ($> != 0) {
 my %conf = read_conf($conf);
 my $state_dir = $conf{MAPED_STATE_DIR} || $conf{MAPE_STATE_DIR} || "/var/db/maped";
 my $state_file = $conf{MAPED_STATE_FILE} || $conf{MAPE_STATE_FILE} || "$state_dir/lease.state";
-my $maped_up = $conf{MAPED_UP} || "/usr/local/libexec/maped/maped-up";
-my $dhcp6leasectl = $conf{DHCP6LEASECTL} || "dhcp6leasectl";
+my $maped_up = resolve_command($conf{MAPED_UP} || "/usr/local/libexec/maped/maped-up",
+    "/usr/local/libexec/maped/maped-up");
+my $dhcp6leasectl = resolve_command($conf{DHCP6LEASECTL} || "dhcp6leasectl",
+    "/usr/sbin/dhcp6leasectl");
+my $ifconfig = resolve_command($conf{IFCONFIG} || "ifconfig", "/sbin/ifconfig");
+my $pfctl = resolve_command($conf{PFCTL} || "pfctl", "/sbin/pfctl");
 my %log_rank = (debug => 0, info => 1, warn => 2);
 $log_level = lc($conf{MAPED_LOG_LEVEL} || $conf{MAPE_LOG_LEVEL} || "info") if $log_level eq "";
 usage() unless exists $log_rank{$log_level};
@@ -59,6 +63,8 @@ if ($daemon) {
 } else {
 	openlog("maped", "pid,perror", LOG_DAEMON);
 }
+
+sandbox_parent();
 
 run_once();
 exit 0 if $once;
@@ -115,6 +121,70 @@ sub read_conf {
 	return %c;
 }
 
+sub resolve_command {
+	my ($cmd, $fallback) = @_;
+	return $cmd if $cmd =~ m{/};
+	return $fallback if defined $fallback && -x $fallback;
+
+	for my $dir (split /:/, $ENV{PATH} || "/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/sbin:/usr/local/bin") {
+		my $path = "$dir/$cmd";
+		return $path if -x $path;
+	}
+
+	return $cmd;
+}
+
+sub sandbox_parent {
+	my $loaded = eval {
+		require OpenBSD::Pledge;
+		OpenBSD::Pledge->import(qw(pledge));
+		require OpenBSD::Unveil;
+		OpenBSD::Unveil->import(qw(unveil));
+		1;
+	};
+	if (!$loaded) {
+		chomp(my $err = $@ || "unknown error");
+		if ($^O eq "openbsd") {
+			log_warn("pledge/unveil unavailable; running without sandbox: $err");
+		} else {
+			log_debug("pledge/unveil unavailable; running without sandbox");
+		}
+		return;
+	}
+
+	for my $rule (sandbox_unveil_rules()) {
+		my ($path, $perms) = @$rule;
+		next if !defined $path || $path eq "" || $path !~ m{^/};
+		unveil($path, $perms) or die "maped: unveil $path: $!\n";
+	}
+	unveil() or die "maped: lock unveil: $!\n";
+	pledge(qw(rpath wpath cpath proc exec unix)) or die "maped: pledge: $!\n";
+	log_debug("pledge/unveil enabled for parent");
+}
+
+sub sandbox_unveil_rules {
+	my @rules = (
+	    ["/bin/sh", "x"],
+	    [$maped_up, "x"],
+	    [$ifconfig, "x"],
+	    [$pfctl, "x"],
+	    [$dhcp6leasectl, "x"],
+	    [$state_dir, "rwc"],
+	);
+
+	push @rules, [$conf, "r"] if $conf =~ m{^/};
+	push @rules, [dirname($conf{LEASE_FILE}), "r"]
+	    if $conf{LEASE_FILE} && $conf{LEASE_FILE} =~ m{^/};
+
+	return @rules;
+}
+
+sub dirname {
+	my ($path) = @_;
+	$path =~ s{/+[^/]*$}{};
+	return $path ne "" ? $path : "/";
+}
+
 sub run_once {
 	my $snapshot = lease_snapshot();
 	if (!complete_snapshot($snapshot)) {
@@ -156,13 +226,13 @@ sub runtime_reconfigure_reason {
 	my $gif = $conf{GIF_IF} || "";
 	return "GIF_IF is not configured" if $gif eq "";
 
-	my ($if_rc, $ifconfig) = run_command("ifconfig", $gif);
-	return "cannot run ifconfig $gif: $ifconfig" if $if_rc == -1;
+	my ($if_rc, $ifconfig_out) = run_command($ifconfig, $gif);
+	return "cannot run $ifconfig $gif: $ifconfig_out" if $if_rc == -1;
 	return "$gif does not exist" if $if_rc != 0;
-	return "$gif is not UP" if $ifconfig !~ /\bUP\b/;
+	return "$gif is not UP" if $ifconfig_out !~ /\bUP\b/;
 
-	my ($pf_rc, $rules) = run_command("pfctl", "-a", "mape", "-sr");
-	return "cannot run pfctl: $rules" if $pf_rc == -1;
+	my ($pf_rc, $rules) = run_command($pfctl, "-a", "mape", "-sr");
+	return "cannot run $pfctl: $rules" if $pf_rc == -1;
 	return "cannot read pf anchor mape" if $pf_rc != 0;
 	return "pf anchor mape has no MAP-E portset rule" if $rules !~ /\bmap-e-portset\b/;
 
