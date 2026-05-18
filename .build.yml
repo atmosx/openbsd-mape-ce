@@ -22,7 +22,7 @@ tasks:
 - test-maped: |
     set -eu
     cd "$REPO"
-    make test
+    doas make test
 - fetch-openbsd-src: |
     set -eu
     ftp -o /tmp/src.tar.gz "$OPENBSD_MIRROR/src.tar.gz"

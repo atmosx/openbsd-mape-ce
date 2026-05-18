@@ -71,6 +71,16 @@ EOF
 	    "$fixtures/derive.expected" "$out"
 }
 
+run_derive_from_zero_psid_lease()
+{
+	out="$tmp/derive-zero-psid.out"
+	env -i PATH="${PATH:-/bin:/usr/bin}" \
+	    LEASE_FILE="$fixtures/cosmote-like-zero-psid.txt" \
+	    perl "$repo/maped/maped-derive" > "$out"
+	compare "maped-derive handles zero-length DHCP PSID" \
+	    "$fixtures/cosmote-like-zero-psid.expected" "$out"
+}
+
 run_maped_once_with_stub_helper()
 {
 	if [ "$(id -u)" -ne 0 ]; then
@@ -109,12 +119,15 @@ EOF
 	    fail "maped one-shot records helper execution" "$out"
 	ok "maped one-shot records helper execution"
 
+	expected_state="$tmp/state.expected"
+	perl -0pe 's/\n\z//' "$fixtures/state.expected" > "$expected_state"
 	compare "maped one-shot writes lease state" \
-	    "$fixtures/state.expected" "$state_dir/lease.state"
+	    "$expected_state" "$state_dir/lease.state"
 }
 
 run_derive_from_lease_file
 run_derive_from_dhcp6leasectl
+run_derive_from_zero_psid_lease
 run_maped_once_with_stub_helper
 
 printf '1..%d\n' "$test_no"
