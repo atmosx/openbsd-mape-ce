@@ -18,10 +18,13 @@ CONF=maped.conf
 RCSCRIPT=maped
 MAN=maped.8
 
-.PHONY: all install install-bin install-conf install-rc install-man uninstall
+.PHONY: all test install install-bin install-conf install-rc install-man uninstall
 
 all:
 	@echo "Run 'make install' as root to install MAP-E CE maped."
+
+test:
+	sh tests/run.sh
 
 install: install-bin install-conf install-rc install-man
 

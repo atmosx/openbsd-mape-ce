@@ -19,6 +19,10 @@ tasks:
     sh -n maped/maped-up maped/maped-down
     mandoc -Tlint -W warning maped/maped.8
     make -n install
+- test-maped: |
+    set -eu
+    cd "$REPO"
+    make test
 - fetch-openbsd-src: |
     set -eu
     ftp -o /tmp/src.tar.gz "$OPENBSD_MIRROR/src.tar.gz"
