@@ -1,0 +1,473 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 Panagiotis Atmatzidis <atma@convalesco.org>
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+#
+# Collect MAP-E, PPPoE, PF, and LAN health state for debugging.
+#
+
+set -eu
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/sbin:/usr/local/bin
+export PATH
+
+CONF="/etc/maped.conf"
+OUT_ROOT="/var/log/mape-health"
+MODE="snapshot"
+INTERVAL=10
+COUNT=60
+DURATION=60
+CLIENT_IP=""
+LAN_IF="em1"
+LAN_IFS="em1 em2 em3"
+VERSION="2026-05-19.2"
+
+usage() {
+	cat <<EOF
+usage: mape-health-snapshot [mode] [options]
+
+modes:
+  snapshot             collect one full state bundle (default)
+  sample               collect small repeated counter samples
+  event                collect before/after state and tcpdump files
+  version              print script version
+
+options:
+  -c file              maped config file (default: /etc/maped.conf)
+  -r dir               output root (default: /var/log/mape-health)
+  -i seconds           sample interval (default: 10)
+  -n count             sample count (default: 60)
+  -d seconds           event capture duration (default: 60)
+  -l interface         event LAN capture interface (default: em1)
+  -H address           event client IPv4 address
+
+examples:
+  mape-health-snapshot snapshot
+  mape-health-snapshot sample -i 10 -n 36
+  mape-health-snapshot event -H 192.168.121.23 -l em1 -d 90
+EOF
+	exit 2
+}
+
+need_arg() {
+	[ "$#" -ge 2 ] || usage
+}
+
+MODE_SET=0
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	version)
+		printf 'mape-health-snapshot %s\n' "$VERSION"
+		exit 0
+		;;
+	snapshot|sample|event)
+		[ "$MODE_SET" -eq 0 ] || usage
+		MODE="$1"
+		MODE_SET=1
+		shift
+		;;
+	debug-args)
+		printf 'argc=%s\n' "$#"
+		printf 'mode=%s\n' "$MODE"
+		printf 'interval=%s\n' "$INTERVAL"
+		printf 'count=%s\n' "$COUNT"
+		printf 'duration=%s\n' "$DURATION"
+		i=1
+		for arg in "$@"; do
+			printf 'arg%d=%s\n' "$i" "$arg"
+			i=$((i + 1))
+		done
+		exit 0
+		;;
+	-c)
+		need_arg "$@"
+		CONF="$2"
+		shift 2
+		;;
+	-r)
+		need_arg "$@"
+		OUT_ROOT="$2"
+		shift 2
+		;;
+	-i)
+		need_arg "$@"
+		INTERVAL="$2"
+		shift 2
+		;;
+	-n)
+		need_arg "$@"
+		COUNT="$2"
+		shift 2
+		;;
+	-d)
+		need_arg "$@"
+		DURATION="$2"
+		shift 2
+		;;
+	-l)
+		need_arg "$@"
+		LAN_IF="$2"
+		shift 2
+		;;
+	-H)
+		need_arg "$@"
+		CLIENT_IP="$2"
+		shift 2
+		;;
+	-h|--help)
+		usage
+		;;
+	--)
+		shift
+		break
+		;;
+	*)
+		usage
+		;;
+	esac
+done
+[ "$#" -eq 0 ] || usage
+
+case "$INTERVAL" in *[!0-9]*|"") usage ;; esac
+case "$COUNT" in *[!0-9]*|"") usage ;; esac
+case "$DURATION" in *[!0-9]*|"") usage ;; esac
+[ "$INTERVAL" -gt 0 ] 2>/dev/null || usage
+[ "$COUNT" -gt 0 ] 2>/dev/null || usage
+[ "$DURATION" -gt 0 ] 2>/dev/null || usage
+
+if [ "$(id -u)" -ne 0 ]; then
+	if [ "$CLIENT_IP" = "" ]; then
+		exec doas "$0" "$MODE" -c "$CONF" -r "$OUT_ROOT" \
+		    -i "$INTERVAL" -n "$COUNT" -d "$DURATION" -l "$LAN_IF"
+	else
+		exec doas "$0" "$MODE" -c "$CONF" -r "$OUT_ROOT" \
+		    -i "$INTERVAL" -n "$COUNT" -d "$DURATION" -l "$LAN_IF" \
+		    -H "$CLIENT_IP"
+	fi
+fi
+
+if [ -r "$CONF" ]; then
+	# shellcheck disable=SC1090
+	. "$CONF"
+fi
+
+WAN_IF="${WAN_IF:-pppoe0}"
+LEASE_IF="${LEASE_IF:-$WAN_IF}"
+GIF_IF="${GIF_IF:-gif0}"
+PF_ANCHOR_FILE="${PF_ANCHOR_FILE:-/etc/pf.anchors/mape}"
+MAPED_DERIVE="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
+LEASE_FILE="${LEASE_FILE:-/var/db/dhcp6leased/$LEASE_IF}"
+export WAN_IF LEASE_IF GIF_IF LEASE_FILE PF_ANCHOR_FILE MAPED_DERIVE
+
+timestamp() {
+	date -u "+%Y%m%dT%H%M%SZ"
+}
+
+make_bundle_dir() {
+	mode="$1"
+	ts="$(timestamp)"
+	dir="$OUT_ROOT/${mode}s/$ts"
+	if [ -e "$dir" ]; then
+		dir="$OUT_ROOT/${mode}s/$ts.$$"
+	fi
+	mkdir -p "$dir"
+	printf "%s\n" "$dir"
+}
+
+run_cmd() {
+	out="$1"
+	shift
+	{
+		printf '$'
+		for arg in "$@"; do
+			printf ' %s' "$arg"
+		done
+		printf '\n'
+	} >>"$out"
+	set +e
+	"$@" >>"$out" 2>&1
+	rc=$?
+	set -e
+	printf '\n[exit %s]\n' "$rc" >>"$out"
+	redact_file "$out"
+	return 0
+}
+
+run_shell() {
+	out="$1"
+	cmd="$2"
+	printf '$ %s\n' "$cmd" >>"$out"
+	set +e
+	sh -c "$cmd" >>"$out" 2>&1
+	rc=$?
+	set -e
+	printf '\n[exit %s]\n' "$rc" >>"$out"
+	redact_file "$out"
+	return 0
+}
+
+redact_file() {
+	file="$1"
+	tmp="$file.$$"
+	sed -E \
+	    -e 's/(^|[[:space:]])authname[[:space:]]+"?[^"[:space:]]+"?/\1authname REDACTED/g' \
+	    -e 's/(^|[[:space:]])authkey[[:space:]]+"?[^"[:space:]]+"?/\1authkey REDACTED/g' \
+	    "$file" >"$tmp" && mv "$tmp" "$file"
+	rm -f "$tmp"
+}
+
+copy_file() {
+	src="$1"
+	dst="$2"
+	if [ -r "$src" ]; then
+		cp "$src" "$dst"
+		redact_file "$dst"
+	else
+		printf "%s is not readable\n" "$src" >"$dst"
+	fi
+}
+
+copy_redacted_file() {
+	src="$1"
+	dst="$2"
+	if [ -r "$src" ]; then
+		cp "$src" "$dst"
+		redact_file "$dst"
+	else
+		printf "%s is not readable\n" "$src" >"$dst"
+	fi
+}
+
+write_meta() {
+	dir="$1"
+	{
+		printf 'mode=%s\n' "$MODE"
+		printf 'timestamp_utc=%s\n' "$(timestamp)"
+		printf 'conf=%s\n' "$CONF"
+		printf 'wan_if=%s\n' "$WAN_IF"
+		printf 'lease_if=%s\n' "$LEASE_IF"
+		printf 'gif_if=%s\n' "$GIF_IF"
+		printf 'pf_anchor_file=%s\n' "$PF_ANCHOR_FILE"
+		printf 'lease_file=%s\n' "$LEASE_FILE"
+		printf 'hostname='
+		hostname 2>/dev/null || true
+		printf 'date='
+		date 2>/dev/null || true
+		printf 'uptime='
+		uptime 2>/dev/null || true
+	} >"$dir/meta.txt"
+}
+
+collect_configs() {
+	dir="$1/config"
+	mkdir -p "$dir"
+	copy_file "$CONF" "$dir/maped.conf"
+	copy_file "/etc/pf.conf" "$dir/pf.conf"
+	copy_file "/etc/dhcp6leased.conf" "$dir/dhcp6leased.conf"
+	copy_redacted_file "/etc/hostname.pppoe0" "$dir/hostname.pppoe0"
+	copy_file "/etc/hostname.gif0" "$dir/hostname.gif0"
+	for ifn in em0 vlan835 $LAN_IFS; do
+		copy_file "/etc/hostname.$ifn" "$dir/hostname.$ifn"
+	done
+	copy_file "$PF_ANCHOR_FILE" "$dir/pf-anchor-mape"
+	copy_file "$LEASE_FILE" "$dir/dhcp6leased-lease"
+}
+
+collect_snapshot() {
+	dir="$1"
+	mkdir -p "$dir"
+	write_meta "$dir"
+	collect_configs "$dir"
+
+	run_cmd "$dir/sysctl.txt" sysctl kern.version
+	run_cmd "$dir/ifconfig-all.txt" ifconfig -A
+	run_cmd "$dir/ifconfig-wan.txt" ifconfig "$WAN_IF"
+	run_cmd "$dir/ifconfig-gif.txt" ifconfig "$GIF_IF"
+	for ifn in $LAN_IFS; do
+		run_cmd "$dir/ifconfig-$ifn.txt" ifconfig "$ifn"
+	done
+
+	run_cmd "$dir/routes.txt" netstat -rn
+	run_cmd "$dir/netstat-$WAN_IF.txt" netstat -I "$WAN_IF" -w 1 -c 5
+	run_cmd "$dir/netstat-$GIF_IF.txt" netstat -I "$GIF_IF" -w 1 -c 5
+	for ifn in $LAN_IFS; do
+		run_cmd "$dir/netstat-$ifn.txt" netstat -I "$ifn" -w 1 -c 5
+	done
+
+	run_cmd "$dir/rcctl-maped.txt" rcctl check maped
+	run_cmd "$dir/rcctl-dhcp6leased.txt" rcctl check dhcp6leased
+	run_cmd "$dir/dhcp6leasectl.txt" dhcp6leasectl -l "$LEASE_IF"
+	run_cmd "$dir/maped-derive.txt" "$MAPED_DERIVE"
+
+	run_cmd "$dir/pf-info.txt" pfctl -si
+	run_cmd "$dir/pf-memory.txt" pfctl -sm
+	run_cmd "$dir/pf-rules.txt" pfctl -sr -vv
+	run_cmd "$dir/pf-nat.txt" pfctl -sn -vv
+	run_cmd "$dir/pf-queues.txt" pfctl -sq -v
+	run_cmd "$dir/pf-mape-rules.txt" pfctl -a mape -sr -vv
+	run_cmd "$dir/pf-mape-nat.txt" pfctl -a mape -sn -vv
+	run_shell "$dir/pf-states-head.txt" "pfctl -ss | head -100"
+	run_shell "$dir/pf-states-count.txt" "pfctl -ss | wc -l"
+
+	run_cmd "$dir/arp.txt" arp -an
+	run_cmd "$dir/ndp.txt" ndp -an
+	run_shell "$dir/messages-tail.txt" "tail -200 /var/log/messages"
+	run_shell "$dir/daemon-tail.txt" "tail -200 /var/log/daemon"
+	run_shell "$dir/dmesg-tail.txt" "dmesg | tail -200"
+}
+
+pf_metrics() {
+	file="$1"
+	awk '
+	    /current entries/ { current = $NF }
+	    /half-open tcp/ { halfopen = $NF }
+	    /^[[:space:]]+searches[[:space:]]/ { searches = $(NF - 1) }
+	    /^[[:space:]]+inserts[[:space:]]/ { inserts = $(NF - 1) }
+	    /^[[:space:]]+removals[[:space:]]/ { removals = $(NF - 1) }
+	    /^[[:space:]]+short[[:space:]]/ { short = $(NF - 1) }
+	    /state-mismatch/ { mismatch = $(NF - 1) }
+	    /no-route/ { noroute = $(NF - 1) }
+	    END {
+	        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+	            current+0, halfopen+0, searches+0, inserts+0,
+	            removals+0, short+0, mismatch+0, noroute+0
+	    }
+	' "$file"
+}
+
+queue_metrics() {
+	file="$1"
+	awk '
+	    /^queue / { q = $2 }
+	    q == "mape_std" && /dropped pkts:/ {
+	        for (i = 1; i <= NF; i++) {
+	            if ($i == "pkts:" && $(i - 1) == "dropped") {
+	                drops = $(i + 1)
+	            }
+	        }
+	    }
+	    q == "mape_std" && /qlength:/ {
+	        gsub(/\[/, "", $3)
+	        split($3, a, "/")
+	        qlen = a[1]
+	    }
+	    END { printf "%s\t%s", drops+0, qlen+0 }
+	' "$file"
+}
+
+collect_sample() {
+	dir="$1"
+	mkdir -p "$dir/raw"
+	write_meta "$dir"
+	printf 'timestamp\tpf_states\tpf_halfopen\tpf_searches\tpf_inserts\tpf_removals\tpf_short\tpf_state_mismatch\tpf_no_route\tmape_std_dropped_pkts\tmape_std_qlen\n' >"$dir/metrics.tsv"
+
+	i=1
+	while [ "$i" -le "$COUNT" ]; do
+		ts="$(timestamp)"
+		pf_file="$dir/raw/$i-pf-info.txt"
+		q_file="$dir/raw/$i-pf-queues.txt"
+		net_file="$dir/raw/$i-netstat.txt"
+		run_cmd "$pf_file" pfctl -si
+		run_cmd "$q_file" pfctl -sq -v
+		run_shell "$net_file" "netstat -I $WAN_IF -w 1 -c 1; netstat -I $GIF_IF -w 1 -c 1; netstat -I $LAN_IF -w 1 -c 1"
+		printf '%s\t' "$ts" >>"$dir/metrics.tsv"
+		pf_metrics "$pf_file" >>"$dir/metrics.tsv"
+		printf '\t' >>"$dir/metrics.tsv"
+		queue_metrics "$q_file" >>"$dir/metrics.tsv"
+		printf '\n' >>"$dir/metrics.tsv"
+		[ "$i" -eq "$COUNT" ] || sleep "$INTERVAL"
+		i=$((i + 1))
+	done
+}
+
+start_capture() {
+	out="$1"
+	iface="$2"
+	filter="$3"
+	if ! command -v tcpdump >/dev/null 2>&1; then
+		printf "tcpdump not found\n" >"$out"
+		return 1
+	fi
+	tcpdump -tttt -s 256 -ni "$iface" "$filter" >"$out" 2>&1 &
+	printf "%s\n" "$!"
+	return 0
+}
+
+collect_event() {
+	dir="$1"
+	mkdir -p "$dir"
+	write_meta "$dir"
+
+	if [ "$CLIENT_IP" = "" ]; then
+		printf "event mode requires -H client-ip for the LAN capture filter\n" >"$dir/error.txt"
+		exit 2
+	fi
+
+	collect_snapshot "$dir/before"
+
+	lan_filter="host $CLIENT_IP or arp or icmp or port 22 or port 53"
+	gif_filter="icmp or port 53 or tcp[tcpflags] & (tcp-syn|tcp-rst) != 0"
+	wan_filter="proto 4 or icmp6 or udp port 546 or udp port 547"
+
+	pids=""
+	if pid=$(start_capture "$dir/tcpdump-$LAN_IF.txt" "$LAN_IF" "$lan_filter"); then
+		pids="$pids $pid"
+	fi
+	if pid=$(start_capture "$dir/tcpdump-$GIF_IF.txt" "$GIF_IF" "$gif_filter"); then
+		pids="$pids $pid"
+	fi
+	if pid=$(start_capture "$dir/tcpdump-$WAN_IF.txt" "$WAN_IF" "$wan_filter"); then
+		pids="$pids $pid"
+	fi
+
+	{
+		printf 'client_ip=%s\n' "$CLIENT_IP"
+		printf 'lan_if=%s\n' "$LAN_IF"
+		printf 'duration=%s\n' "$DURATION"
+		printf 'started_utc=%s\n' "$(timestamp)"
+		printf 'pids=%s\n' "$pids"
+	} >"$dir/event.txt"
+
+	sleep "$DURATION"
+
+	for pid in $pids; do
+		kill "$pid" >/dev/null 2>&1 || true
+	done
+	for pid in $pids; do
+		wait "$pid" >/dev/null 2>&1 || true
+	done
+
+	printf 'ended_utc=%s\n' "$(timestamp)" >>"$dir/event.txt"
+	collect_snapshot "$dir/after"
+}
+
+case "$MODE" in
+snapshot)
+	bundle="$(make_bundle_dir snapshot)"
+	collect_snapshot "$bundle"
+	;;
+sample)
+	bundle="$(make_bundle_dir sample)"
+	collect_sample "$bundle"
+	;;
+event)
+	bundle="$(make_bundle_dir event)"
+	collect_event "$bundle"
+	;;
+*)
+	usage
+	;;
+esac
+
+printf 'wrote %s\n' "$bundle"

@@ -13,6 +13,7 @@ RCMODE?=555
 MANMODE?=444
 
 SCRIPT=maped
+HEALTH=mape-health-snapshot
 HELPERS=maped-derive maped-up maped-down
 CONF=maped.conf
 RCSCRIPT=maped
@@ -31,6 +32,7 @@ install: install-bin install-conf install-rc install-man
 install-bin:
 	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(BINDIR)
 	install -o $(OWNER) -g $(GROUP) -m $(BINMODE) maped/$(SCRIPT) $(DESTDIR)$(BINDIR)/$(SCRIPT)
+	install -o $(OWNER) -g $(GROUP) -m $(BINMODE) maped/$(HEALTH) $(DESTDIR)$(BINDIR)/$(HEALTH)
 	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(LIBEXECDIR)
 	for helper in $(HELPERS); do \
 		install -o $(OWNER) -g $(GROUP) -m $(BINMODE) maped/$$helper $(DESTDIR)$(LIBEXECDIR)/$$helper; \
@@ -55,6 +57,7 @@ install-man:
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(SCRIPT)
+	rm -f $(DESTDIR)$(BINDIR)/$(HEALTH)
 	for helper in $(HELPERS); do \
 		rm -f $(DESTDIR)$(LIBEXECDIR)/$$helper; \
 	done
