@@ -162,6 +162,33 @@ It emits queue metrics for every queue returned by `pfctl -sq -v`:
 - `pf_queue_length{queue="mape_std"}`
 - `pf_queue_limit{queue="mape_std"}`
 
+## Grafana Dashboard
+
+Import `metrics/grafana-mape-pf-dashboard.json` into Grafana and select the
+Prometheus data source that scrapes the router.
+
+The dashboard includes:
+
+- MAP-E control-plane health, including `maped`, `dhcp6leased`, DHCPv6 MAP-E
+  lease state, gif/PPPoE interface state, route checks, PF anchor checks, and
+  `maped-derive` health.
+- PF state table panels for current states, half-open TCP states, and selected
+  `pfctl -si` counter rates.
+- MAP-E queue panels for throughput, packet rate, drops, queue fill, and a
+  current queue snapshot.
+
+The dashboard uses Grafana's importable dashboard JSON model with current panel
+types such as stat, state timeline, time series, bar gauge, and table panels.
+Template variables are derived from Prometheus labels:
+
+- `$job` from `label_values(maped_up, job)`
+- `$instance` from `label_values(maped_up{job=~"$job"}, instance)`
+- `$queue` from `pf_queue_packets_total`
+- `$pf_counter` from `pf_counter_total`
+
+If the scrape job is not named `openbsd-mape`, choose the correct job from the
+dashboard variable after import.
+
 ## Suggested Alerts
 
 These are useful first-pass Prometheus alert expressions:
