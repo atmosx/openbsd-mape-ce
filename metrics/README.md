@@ -92,7 +92,8 @@ types, including `_total` suffixes for counters.
 ## Grafana
 
 Import `grafana-map-e-ce-pfctl-dashboard.json` into Grafana and select the
-Prometheus data source that scrapes the router.
+Prometheus data source that scrapes the router from the dashboard's
+`Data source` variable.
 
 The dashboard includes:
 
@@ -104,6 +105,13 @@ The dashboard includes:
 Rate panels use `$rate_window`, defaulting to `5m`, instead of Grafana's
 `$__rate_interval`. Keep `$rate_window` several times larger than the collector
 refresh interval; `5m` works well for a once-per-minute cron job.
+
+The dashboard intentionally uses a regular Grafana datasource variable named
+`datasource` instead of import-time `__inputs`. This is more reliable when a
+Grafana instance has multiple Prometheus datasources or when the dashboard is
+provisioned from JSON. All panels, query variables, and ad hoc filters reference
+`${datasource}`, so changing the `Data source` dropdown updates the whole
+dashboard.
 
 ## Naming
 

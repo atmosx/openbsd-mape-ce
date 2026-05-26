@@ -1,14 +1,4 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_PROMETHEUS",
-      "label": "Prometheus",
-      "description": "",
-      "type": "datasource",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus"
-    }
-  ],
   "__elements": {},
   "__requires": [
     {
@@ -58,7 +48,7 @@
       }
     ]
   },
-  "description": "MAP-E CE dashboard combining mape-prometheus-metrics health checks, PF queue metrics, node_exporter textfile freshness, and pfctl_exporter-compatible metrics. Rate queries use the $rate_window variable instead of Grafana $__rate_interval because the textfile collector is commonly refreshed once per minute.",
+  "description": "MAP-E CE dashboard combining mape-prometheus-metrics health checks, PF queue metrics, node_exporter textfile freshness, and pfctl_exporter-compatible metrics. Select the Prometheus datasource with the dashboard datasource variable. Rate queries use $rate_window instead of Grafana $__rate_interval because the textfile collector is commonly refreshed once per minute.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "gnetId": null,
@@ -80,7 +70,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "description": "Boolean health checks emitted by mape-prometheus-metrics. maped_up and dhcp6leased_up come from rcctl; dhcp6leased_mape_bound confirms the DHCPv6 MAP-E option is present; pppoe_session_up checks WAN link state; mape_gif_up and mape_gif_running check the gif tunnel; mape_anchor_portset_present and mape_anchor_file_portset_present verify live and generated PF map-e-portset rules; mape_default_route_v4/v6 check expected routing; mape_derive_ok confirms maped-derive can calculate CE IPv6 and MAP-E IPv4 values.",
           "fieldConfig": {
@@ -178,7 +168,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "maped_up{instance=~\"$instance\"}",
@@ -189,7 +179,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "dhcp6leased_up{instance=~\"$instance\"}",
@@ -200,7 +190,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "dhcp6leased_mape_bound{instance=~\"$instance\"}",
@@ -211,7 +201,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "pppoe_session_up{instance=~\"$instance\"}",
@@ -222,7 +212,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "mape_gif_up{instance=~\"$instance\"}",
@@ -233,7 +223,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "mape_gif_running{instance=~\"$instance\"}",
@@ -244,7 +234,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "mape_anchor_portset_present{instance=~\"$instance\"}",
@@ -255,7 +245,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "mape_anchor_file_portset_present{instance=~\"$instance\"}",
@@ -266,7 +256,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "mape_default_route_v4{instance=~\"$instance\"}",
@@ -277,7 +267,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "mape_default_route_v6{instance=~\"$instance\"}",
@@ -288,7 +278,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "mape_derive_ok{instance=~\"$instance\"}",
@@ -303,7 +293,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "description": "Age in seconds of /var/prometheus/textfile/mape.prom as observed by node_exporter. This should stay close to the cron interval; sustained age above a few minutes means the collector is stale even if Prometheus can still scrape node_exporter.",
           "fieldConfig": {
@@ -389,7 +379,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "time() - node_textfile_mtime_seconds{instance=~\"$instance\", file=~\".*mape[.]prom\"}",
@@ -404,7 +394,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "description": "node_textfile_scrape_error is 1 when node_exporter cannot read one or more textfile collector files. Keep this at 0 before trusting the MAP-E and PF metrics.",
           "fieldConfig": {
@@ -502,7 +492,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "node_textfile_scrape_error{instance=~\"$instance\"}",
@@ -517,7 +507,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "description": "Traffic rate through PF queues reported by pfctl -sq -v. pf_queue_bytes_total is cumulative bytes per queue; rate over $rate_window converts it to bytes/sec and the panel multiplies by 8 for bits/sec.",
           "fieldConfig": {
@@ -598,7 +588,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "sum(rate(pf_queue_bytes_total{instance=~\"$instance\", queue=~\"$queue\"}[$rate_window])) by (instance, queue) * 8",
@@ -614,7 +604,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "description": "Current PF queue occupancy as a percentage of configured queue limit. pf_queue_length and pf_queue_limit are gauges from pfctl -sq -v; sustained non-zero fill suggests congestion.",
           "fieldConfig": {
@@ -703,7 +693,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "100 * pf_queue_length{instance=~\"$instance\", queue=~\"$queue\"} / pf_queue_limit{instance=~\"$instance\", queue=~\"$queue\"}",
@@ -718,7 +708,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "description": "Drop rate per PF queue. pf_queue_dropped_packets_total is cumulative dropped packets per queue; non-zero rates on mape_std usually mean the queue is saturated or mis-sized.",
           "fieldConfig": {
@@ -803,7 +793,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "sum(rate(pf_queue_dropped_packets_total{instance=~\"$instance\", queue=~\"$queue\"}[$rate_window])) by (instance, queue)",
@@ -833,7 +823,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -913,7 +903,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "sum(rate(pfctl_rule_evaluations_total{instance=~\"$instance\"}[$rate_window])) by (instance)",
@@ -931,7 +921,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1015,7 +1005,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "topk($top, rate(pfctl_rule_evaluations_total{instance=~\"$instance\"}[$rate_window]))",
@@ -1048,7 +1038,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1131,7 +1121,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "topk($top, rate(pfctl_rule_bytes_total{instance=~\"$instance\"}[$rate_window]) * 8)",
@@ -1149,7 +1139,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1232,7 +1222,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "topk($top, rate(pfctl_rule_packets_total{instance=~\"$instance\"}[$rate_window]))",
@@ -1250,7 +1240,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1335,7 +1325,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "topk($top, rate(pfctl_rule_bytes_total{instance=~\"$instance\"}[$rate_window]) / rate(pfctl_rule_packets_total{instance=~\"$instance\"}[$rate_window]))",
@@ -1353,7 +1343,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1435,7 +1425,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "topk($top, rate(pfctl_rule_states_total{instance=~\"$instance\"}[$rate_window]))",
@@ -1468,7 +1458,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1550,7 +1540,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "sum(rate(pfctl_rule_states_total{instance=~\"$instance\"}[$rate_window])) by (instance)",
@@ -1583,7 +1573,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1636,7 +1626,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "pfctl_state_table_current_entries{instance=~\"$instance\"}",
@@ -1652,7 +1642,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1732,7 +1722,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "pfctl_state_table_current_entries{instance=~\"$instance\"}",
@@ -1748,7 +1738,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1795,7 +1785,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "rate(pfctl_state_table_searches_total{instance=~\"$instance\"}[$rate_window])",
@@ -1813,7 +1803,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1860,7 +1850,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "rate(pfctl_state_table_inserts_total{instance=~\"$instance\"}[$rate_window])",
@@ -1878,7 +1868,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -1925,7 +1915,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "rate(pfctl_state_table_removals_total{instance=~\"$instance\"}[$rate_window])",
@@ -1958,7 +1948,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "description": "Instant traffic split by address family for the selected action. pfctl_interface_bytes_total is cumulative bytes by interface, direction, family, and PF action; rate over $rate_window converts it to traffic rate.",
           "fieldConfig": {
@@ -2008,7 +1998,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2027,7 +2017,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2106,7 +2096,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2120,7 +2110,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2141,7 +2131,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2191,7 +2181,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2211,7 +2201,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2286,7 +2276,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2300,7 +2290,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2321,7 +2311,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2371,7 +2361,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2391,7 +2381,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2465,7 +2455,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2479,7 +2469,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2500,7 +2490,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2579,7 +2569,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "rate(pfctl_interface_bytes_total{instance=~\"$instance\", interface=~\"$interface\", action=\"${action}\", direction=\"In\", family=~\"$family\"}[$rate_window]) * 8 > 0",
@@ -2591,7 +2581,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "rate(pfctl_interface_bytes_total{instance=~\"$instance\", interface=~\"$interface\", action=\"${action}\", direction=\"Out\", family=~\"$family\"}[$rate_window]) * -8 < 0",
@@ -2627,7 +2617,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2702,7 +2692,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "sum(rate(pfctl_table_bytes_total{instance=~\"$instance\", action=~\"$action\", direction=\"In\", table=~\"$table\"}[$rate_window])) by (table, action, direction, instance) * 8",
@@ -2714,7 +2704,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "sum(rate(pfctl_table_bytes_total{instance=~\"$instance\", action=~\"$action\", direction=\"Out\", table=~\"$table\"}[$rate_window])) by (table, action, direction, instance) * -8",
@@ -2748,7 +2738,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2824,7 +2814,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "exemplar": false,
@@ -2858,7 +2848,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2906,7 +2896,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "rate($counter{instance=~\"$instance\"}[$rate_window])",
@@ -2948,7 +2938,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
           "fieldConfig": {
             "defaults": {
@@ -2996,7 +2986,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "${datasource}"
               },
               "editorMode": "code",
               "expr": "rate($limit_counter{instance=~\"$instance\"}[$rate_window])",
@@ -3040,11 +3030,26 @@
   "templating": {
     "list": [
       {
+        "current": {},
+        "description": "Prometheus datasource that scrapes node_exporter on the MAP-E CE router.",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
         "allValue": ".*",
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "label_values(pfctl_interface_bytes_total,instance)",
         "hide": 0,
@@ -3067,7 +3072,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "label_values(pfctl_interface_bytes_total{instance=~\"$instance\"},interface)",
         "hide": 0,
@@ -3090,7 +3095,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "label_values(pfctl_interface_bytes_total{instance=~\"$instance\"},action)",
         "hide": 2,
@@ -3113,7 +3118,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "label_values(pfctl_interface_bytes_total{instance=~\"$instance\"},direction)",
         "hide": 0,
@@ -3136,7 +3141,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "label_values(pfctl_interface_bytes_total{instance=~\"$instance\"},family)",
         "hide": 0,
@@ -3159,7 +3164,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "metrics(pfctl_counters_.*)",
         "hide": 2,
@@ -3182,7 +3187,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "metrics(pfctl_limit_counters_.*)",
         "hide": 2,
@@ -3205,7 +3210,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "label_values(pfctl_table_addresses{instance=~\"$instance\"},table)",
         "hide": 0,
@@ -3228,7 +3233,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "definition": "label_values(pf_queue_packets_total{instance=~\"$instance\"},queue)",
         "description": "PF queue names exported by mape-prometheus-metrics from pfctl -sq -v, such as mape_std and mape_voip.",
@@ -3250,7 +3255,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "bdacd31a-5476-4834-b9bf-d7df8bd6cad5"
+          "uid": "${datasource}"
         },
         "description": "Custom filters (will be applied to all panels)",
         "filters": [],
