@@ -1,36 +1,25 @@
 # MAP-E Prometheus Metrics
 
-This directory contains a small Prometheus textfile collector for an OpenBSD
-MAP-E CE router.
+This directory contains the Prometheus textfile collector and Grafana dashboard
+for an OpenBSD MAP-E CE router.
 
-The collector is intentionally split from the exporter:
+## Contents
 
-```text
-root cron
-  -> /usr/local/sbin/mape-prometheus-metrics
-  -> writes /var/prometheus/textfile/mape.prom atomically
-
-non-root exporter or httpd
-  -> serves the generated text file
-
-Prometheus
-  -> scrapes the metrics from another host
-```
-
-This keeps privileged commands such as `pfctl(8)`, `ifconfig(8)`, and
-`dhcp6leasectl(8)` out of a long-running HTTP service.
+- `mape-prometheus-metrics`: short-lived root collector that writes
+  `/var/prometheus/textfile/mape.prom` atomically.
+- `grafana-map-e-ce-pfctl-dashboard.json`: Grafana dashboard for MAP-E CE,
+  `maped`, PF queues, node_exporter textfile freshness, and
+  pfctl-compatible metrics.
+- `LICENSE`: BSD-3-Clause license for the metrics collector/dashboard work
+  derived from `pfctl_exporter`.
 
 ## Install
 
 Install the collector on the router:
 
 ```ksh
+cd /usr/local/src/openbsd-mape-ce
 doas make metrics-install
-```
-
-Create the textfile directory:
-
-```ksh
 doas install -d -o root -g wheel -m 755 /var/prometheus/textfile
 ```
 
@@ -41,31 +30,15 @@ doas /usr/local/sbin/mape-prometheus-metrics
 cat /var/prometheus/textfile/mape.prom
 ```
 
-The script reads `/etc/maped.conf` by default. Override paths if needed:
-
-```ksh
-doas /usr/local/sbin/mape-prometheus-metrics \
-  -c /etc/maped.conf \
-  -o /var/prometheus/textfile/mape.prom \
-  -w pppoe0 \
-  -g gif0
-```
-
-## Cron
-
-Run once per minute:
+Run it from cron:
 
 ```cron
 * * * * * /usr/local/sbin/mape-prometheus-metrics >/dev/null 2>&1
 ```
 
-This is intentionally cheap: it collects current PF counters, queue counters,
-interface state, route state, DHCPv6 MAP-E lease state, and `maped-derive`
-health, then exits.
+## node_exporter
 
-## Serving With node_exporter
-
-If `node_exporter` is available, use its textfile collector:
+Serve the generated textfile with node_exporter's textfile collector:
 
 ```ksh
 node_exporter --collector.textfile.directory=/var/prometheus/textfile
@@ -78,55 +51,14 @@ scrape_configs:
   - job_name: openbsd-mape
     static_configs:
       - targets:
-          - 192.168.121.1:9100
+          - 192.168.x.x:9100
 ```
 
-Restrict access with PF so only the Prometheus server can scrape the exporter.
-
-## Serving With OpenBSD httpd
-
-If you do not want node_exporter on the router, write directly under
-`/var/www/htdocs/metrics`:
-
-```ksh
-doas install -d -o root -g daemon -m 755 /var/www/htdocs/metrics
-doas /usr/local/sbin/mape-prometheus-metrics -o /var/www/htdocs/metrics/mape.prom
-```
-
-Cron example:
-
-```cron
-* * * * * /usr/local/sbin/mape-prometheus-metrics -o /var/www/htdocs/metrics/mape.prom >/dev/null 2>&1
-```
-
-Minimal `httpd.conf` example:
-
-```conf
-server "mape-metrics" {
-	listen on 192.168.121.1 port 9101
-	root "/htdocs"
-	location "/metrics/mape.prom" {
-		request strip 0
-	}
-}
-```
-
-Scrape example:
-
-```yaml
-scrape_configs:
-  - job_name: openbsd-mape-textfile
-    metrics_path: /metrics/mape.prom
-    static_configs:
-      - targets:
-          - 192.168.121.1:9101
-```
-
-Again, restrict this listener with PF to the Prometheus host.
+Restrict access with PF so only the Prometheus server can scrape node_exporter.
 
 ## Metrics
 
-The script emits health gauges:
+The collector emits MAP-E and service health gauges:
 
 - `maped_up`
 - `dhcp6leased_up`
@@ -140,106 +72,57 @@ The script emits health gauges:
 - `mape_default_route_v6`
 - `mape_derive_ok`
 
-It emits PF state gauges:
+It also emits local PF and queue metrics:
 
 - `pf_states`
 - `pf_halfopen_tcp`
+- `pf_counter_total{counter="..."}`
+- `pf_queue_packets_total{queue="..."}`
+- `pf_queue_bytes_total{queue="..."}`
+- `pf_queue_dropped_packets_total{queue="..."}`
+- `pf_queue_dropped_bytes_total{queue="..."}`
+- `pf_queue_length{queue="..."}`
+- `pf_queue_limit{queue="..."}`
 
-It also emits pfctl-exporter-compatible metrics parsed from `pfctl -vvs info`,
-`pfctl -vvs Interfaces`, `pfctl -Pvs rules`, and `pfctl -vvs Tables`. These use
-the same public names and Prometheus types as
-[`pfctl_exporter.py`](https://github.com/tykling/pfctl_exporter/blob/main/pfctl_exporter.py),
-for example:
+Finally, it emits `pfctl_exporter`-compatible metrics parsed from
+`pfctl -vvs info`, `pfctl -vvs Interfaces`, `pfctl -Pvs rules`, and
+`pfctl -vvs Tables`. These keep the upstream `pfctl_*` names and Prometheus
+types, including `_total` suffixes for counters.
 
-- `pfctl_state_table_current_entries`
-- `pfctl_state_table_searches_total`
-- `pfctl_interface_packets_total`
-- `pfctl_rule_evaluations_total`
-- `pfctl_table_flags_active`
-- `pfctl_table_match_evaluations_total`
+## Grafana
 
-It emits PF cumulative counters using a `counter` label:
-
-- `pf_counter_total{counter="short"}`
-- `pf_counter_total{counter="state_mismatch"}`
-- `pf_counter_total{counter="no_route"}`
-- and the other counters from `pfctl -si`
-
-It emits queue metrics for every queue returned by `pfctl -sq -v`:
-
-- `pf_queue_packets_total{queue="mape_std"}`
-- `pf_queue_bytes_total{queue="mape_std"}`
-- `pf_queue_dropped_packets_total{queue="mape_std"}`
-- `pf_queue_dropped_bytes_total{queue="mape_std"}`
-- `pf_queue_length{queue="mape_std"}`
-- `pf_queue_limit{queue="mape_std"}`
-
-## Grafana Dashboard
-
-Import `metrics/grafana-mape-pf-dashboard.json` into Grafana and select the
+Import `grafana-map-e-ce-pfctl-dashboard.json` into Grafana and select the
 Prometheus data source that scrapes the router.
 
 The dashboard includes:
 
-- MAP-E control-plane health, including `maped`, `dhcp6leased`, DHCPv6 MAP-E
-  lease state, gif/PPPoE interface state, route checks, PF anchor checks, and
-  `maped-derive` health.
-- PF state table panels for current states, half-open TCP states, and selected
-  `pfctl -si` counter rates.
-- MAP-E queue panels for throughput, packet rate, drops, queue fill, and a
-  current queue snapshot.
+- MAP-E CE control-plane health.
+- node_exporter textfile freshness and scrape error checks.
+- PF queue throughput, drops, and fill.
+- pfctl-compatible PF rule, interface, table, state table, and counter panels.
 
-The dashboard uses Grafana's importable dashboard JSON model with current panel
-types such as stat, state timeline, time series, bar gauge, and table panels.
-Template variables are derived from Prometheus labels:
+Rate panels use `$rate_window`, defaulting to `5m`, instead of Grafana's
+`$__rate_interval`. Keep `$rate_window` several times larger than the collector
+refresh interval; `5m` works well for a once-per-minute cron job.
 
-- `$job` from `label_values(maped_up, job)`
-- `$instance` from `label_values(maped_up{job=~"$job"}, instance)`
-- `$queue` from `pf_queue_packets_total`
-- `$pf_counter` from `pf_counter_total`
+## Naming
 
-If the scrape job is not named `openbsd-mape`, choose the correct job from the
-dashboard variable after import.
+Use `MAP-E CE` in prose for the Customer Edge MAP-E router role. Use
+`map-e-ce` in filenames and dashboard UIDs. The daemon remains `maped`, and the
+collector executable is `mape-prometheus-metrics`.
 
-## Suggested Alerts
+Metric prefixes are intentionally split:
 
-These are useful first-pass Prometheus alert expressions:
+- `maped_*`, `mape_*`, `dhcp6leased_*`, and `pppoe_*` are MAP-E/router health.
+- `pf_*` are local compatibility metrics from this project.
+- `pfctl_*` are compatible with the upstream `pfctl_exporter` metric names and
+  types.
 
-```promql
-maped_up == 0
-dhcp6leased_up == 0
-dhcp6leased_mape_bound == 0
-mape_gif_up == 0
-pppoe_session_up == 0
-mape_anchor_portset_present == 0
-mape_default_route_v4 == 0
-mape_default_route_v6 == 0
-mape_derive_ok == 0
-```
+## License
 
-Counter-rate alerts:
-
-```promql
-increase(pf_counter_total{counter="no_route"}[5m]) > 0
-increase(pf_queue_dropped_packets_total{queue="mape_std"}[5m]) > 0
-increase(pf_counter_total{counter="state_mismatch"}[5m]) > 100
-increase(pf_counter_total{counter="short"}[5m]) > 100
-```
-
-Queue backlog:
-
-```promql
-pf_queue_length{queue="mape_std"} > 0
-```
-
-Tune thresholds after a few days of baseline data. `state_mismatch` and `short`
-can have background noise; their rate during symptoms is more useful than their
-absolute value.
-
-## Relationship To `mape-health-snapshot`
-
-Use this script for continuous dashboards and alerts.
-
-Use `mape-health-snapshot` for forensic bundles when something is wrong. The
-snapshot collector captures much more context, including configs, routes,
-tcpdump event captures, logs, and PF state samples.
+The top-level project is ISC licensed. The metrics directory has its own
+`LICENSE` because the pfctl-compatible metric names/parser and dashboard are
+derived from Thomas Steen Rasmussen's
+[`pfctl_exporter`](https://github.com/tykling/pfctl_exporter), published as the
+BSD-3-Clause `pfctl-exporter` package. Keep `metrics/LICENSE` with redistributed
+copies of this directory.

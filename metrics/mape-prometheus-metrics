@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-3-Clause
 #
 # Emit Prometheus textfile metrics for an OpenBSD MAP-E CE router.
 #
