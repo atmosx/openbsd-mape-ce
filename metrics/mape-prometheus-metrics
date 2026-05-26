@@ -89,6 +89,11 @@ GIF_IF="${GIF_IF:-gif0}"
 PF_ANCHOR_FILE="${PF_ANCHOR_FILE:-/etc/pf.anchors/$PF_ANCHOR}"
 MAPED_DERIVE="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
 LEASE_FILE="${LEASE_FILE:-/var/db/dhcp6leased/$LEASE_IF}"
+PFCTL="${PFCTL:-pfctl}"
+IFCONFIG="${IFCONFIG:-ifconfig}"
+DHCP6LEASECTL="${DHCP6LEASECTL:-dhcp6leasectl}"
+NETSTAT="${NETSTAT:-netstat}"
+RCCTL="${RCCTL:-rcctl}"
 
 export WAN_IF LEASE_IF GIF_IF LEASE_FILE PF_ANCHOR_FILE MAPED_DERIVE
 export PD_PREFIX PD_IF DHCP6LEASECTL
@@ -97,7 +102,7 @@ export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_O
 OUT_DIR="$(dirname "$OUT")"
 TMP="$OUT.$$"
 mkdir -p "$OUT_DIR"
-trap 'rm -f "$TMP"' EXIT
+trap 'rm -f "$TMP" "$TMP".pfctl_*' EXIT
 
 run() {
 	"$@" 2>/dev/null || true
@@ -154,13 +159,325 @@ emit_labeled_gauge() {
 	printf '%s{%s} %s\n' "$name" "$label" "$value"
 }
 
-PF_INFO="$(run pfctl -si)"
-PF_QUEUES="$(run pfctl -sq -v)"
-PF_MMAPE="$(run pfctl -a "$PF_ANCHOR" -sr)"
-IF_GIF="$(run ifconfig "$GIF_IF")"
-IF_WAN="$(run ifconfig "$WAN_IF")"
-LEASE="$(run dhcp6leasectl -l "$LEASE_IF")"
-ROUTES="$(run netstat -rn)"
+emit_pfctl_exporter_metrics() {
+	perl -MTime::Local=timelocal - "$PFCTL_INFO_VERBOSE" "$PFCTL_INTERFACES_VERBOSE" "$PFCTL_RULES_VERBOSE" "$PFCTL_TABLES_VERBOSE" <<'PERL'
+use strict;
+use warnings;
+
+my ($info_file, $interfaces_file, $rules_file, $tables_file) = @ARGV;
+my %declared;
+
+sub read_lines {
+	my ($file) = @_;
+	open my $fh, "<", $file or return ();
+	chomp(my @lines = <$fh>);
+	close $fh;
+	return @lines;
+}
+
+sub label_escape {
+	my ($value) = @_;
+	$value =~ s/\\/\\\\/g;
+	$value =~ s/"/\\"/g;
+	$value =~ s/\n/\\n/g;
+	return $value;
+}
+
+sub labelset {
+	my (@pairs) = @_;
+	my @labels;
+	while (@pairs) {
+		my $key = shift @pairs;
+		my $value = shift @pairs;
+		push @labels, $key . '="' . label_escape($value) . '"';
+	}
+	return @labels ? "{" . join(",", @labels) . "}" : "";
+}
+
+sub counter_name {
+	my ($name) = @_;
+	return $name =~ /_total\z/ ? $name : "${name}_total";
+}
+
+sub declare_metric {
+	my ($name, $type, $help) = @_;
+	return if $declared{$name}++;
+	print "# HELP $name $help\n";
+	print "# TYPE $name $type\n";
+}
+
+sub emit_sample {
+	my ($name, $type, $value, $help, @labels) = @_;
+	$name = counter_name($name) if $type eq "counter";
+	declare_metric($name, $type, $help);
+	print $name . labelset(@labels) . " $value\n";
+}
+
+sub parse_timestamp {
+	my ($text) = @_;
+	my %month = (
+		Jan => 0, Feb => 1, Mar => 2, Apr => 3, May => 4, Jun => 5,
+		Jul => 6, Aug => 7, Sep => 8, Oct => 9, Nov => 10, Dec => 11,
+	);
+	return 0 unless $text =~ /^\S+ (\S+) +(\d+) (\d+):(\d+):(\d+) (\d+)$/;
+	my ($mon, $mday, $hour, $min, $sec, $year) = ($1, $2, $3, $4, $5, $6);
+	return 0 unless exists $month{$mon};
+	my $epoch = eval { timelocal($sec, $min, $hour, $mday, $month{$mon}, $year) };
+	return defined $epoch ? $epoch : 0;
+}
+
+sub collect_info {
+	my ($file) = @_;
+	my $header = "";
+	for my $line (read_lines($file)) {
+		next if $line eq "";
+		next if $header eq "" && substr($line, 0, 11) ne "State Table";
+		if (substr($line, 0, 2) ne "  ") {
+			if (index($line, "Total             Rate") >= 0) {
+				$line = substr($line, 0, index($line, "  "));
+			}
+			$line =~ s/^\s+|\s+\z//g;
+			$header = lc $line;
+			$header =~ s/ /_/g;
+			next;
+		}
+		if ($line =~ /^  ([a-z\- ]+?) +([0-9]+).*/) {
+			my ($key, $value) = ($1, $2);
+			$key =~ s/[ -]/_/g;
+			my $name = "pfctl_${header}_${key}";
+			my $type = $line =~ /\/s\z/ ? "counter" : "gauge";
+			emit_sample($name, $type, $value, $name);
+			next;
+		}
+		if ($header eq "syncookies" && $line =~ /^  mode\s+(.+)$/) {
+			emit_sample(
+				"pfctl_syncookies_mode",
+				"gauge",
+				1,
+				"The current syncookies mode is in the 'mode' label of this metric. The value of this metric is always 1.",
+				"mode", $1
+			);
+			next;
+		}
+		if ($header eq "syncookies" && $line =~ /^  active\s+(.+)$/) {
+			emit_sample(
+				"pfctl_syncookies_active",
+				"gauge",
+				1,
+				"The current syncookies active status is in the 'active' label of this metric. The value of this metric is always 1.",
+				"active", $1
+			);
+			next;
+		}
+	}
+}
+
+sub collect_interfaces {
+	my ($file) = @_;
+	my $interface = "";
+	for my $line (read_lines($file)) {
+		next if $line eq "";
+		if ($line =~ /^([a-z0-9.]+)( \(skip\))?$/) {
+			$interface = $1;
+			emit_sample(
+				"pfctl_interface_skip",
+				"gauge",
+				defined($2) ? 1 : 0,
+				"This Gauge is 1 if filtering on the interface is disabled with 'set skip' or 0 if filtering is enabled on the interface",
+				"interface", $interface
+			);
+			next;
+		}
+		if ($line =~ /^\tReferences:\s+(\d+)\s*/) {
+			emit_sample(
+				"pfctl_interface_ruleset_references",
+				"gauge",
+				$1,
+				"The number of rules in the current pf ruleset referencing this interface",
+				"interface", $interface
+			);
+			next;
+		}
+		if ($line =~ /^\tCleared:\s+(.+)/) {
+			emit_sample(
+				"pfctl_interface_cleared_timestamp_seconds",
+				"gauge",
+				parse_timestamp($1),
+				"Timestamp for when the counters for this interface were last reset",
+				"interface", $interface
+			);
+			next;
+		}
+		if ($line =~ /^\t(In|Out)(4|6)\/(Block|Pass): +\[ +Packets: +([0-9]+) +Bytes: +([0-9]+) +\]/) {
+			my ($direction, $family, $action, $packets, $bytes) =
+			    ($1, "ipv$2", $3, $4, $5);
+			emit_sample(
+				"pfctl_interface_packets_total",
+				"counter",
+				$packets,
+				"The number of packets on this interface aggregated by direction, family, and action",
+				"interface", $interface, "direction", $direction, "family", $family, "action", $action
+			);
+			emit_sample(
+				"pfctl_interface_bytes_total",
+				"counter",
+				$bytes,
+				"The number of bytes on this interface aggregated by direction, family, and action",
+				"interface", $interface, "direction", $direction, "family", $family, "action", $action
+			);
+			next;
+		}
+	}
+}
+
+sub collect_rules {
+	my ($file) = @_;
+	my $rule = "";
+	for my $line (read_lines($file)) {
+		next if $line eq "";
+		if ($line =~ /^([a-z]+.*)$/) {
+			$rule = $1;
+			next;
+		}
+		if ($line =~ /^  \[ Evaluations: ([0-9]+)\s+Packets: ([0-9]+)\s+Bytes: ([0-9]+)\s+States: ([0-9]+)\s+\]$/) {
+			my %value = (
+				evaluations => $1,
+				packets => $2,
+				bytes => $3,
+				states => $4,
+			);
+			for my $metric (qw(evaluations packets bytes states)) {
+				emit_sample(
+					"pfctl_rule_${metric}_total",
+					"counter",
+					$value{$metric},
+					"Total number of {metric} for this pf rule",
+					"rule", $rule
+				);
+			}
+		}
+	}
+}
+
+sub collect_tables {
+	my ($file) = @_;
+	my $table = "";
+	my @flags = qw(constant persistent active inactive referenced hidden counters);
+	for my $line (read_lines($file)) {
+		next if $line eq "";
+		if ($line =~ /^([c-])([p-])([a-])([i-])([r-])([h-])([C-])\t([a-z0-9-_]+)$/) {
+			$table = $8;
+			my @values = ($1, $2, $3, $4, $5, $6, $7);
+			for my $idx (0 .. $#flags) {
+				my $flag = $flags[$idx];
+				emit_sample(
+					"pfctl_table_flags_$flag",
+					"gauge",
+					$values[$idx] eq "-" ? 0 : 1,
+					"Gauge set to 1 if this pf table has the $flag flag, 0 if not.",
+					"table", $table
+				);
+			}
+			next;
+		}
+		if ($line =~ /^\tAddresses:\s+([0-9]+)/) {
+			emit_sample(
+				"pfctl_table_addresses",
+				"gauge",
+				$1,
+				"Total number of addresses in this pf table",
+				"table", $table
+			);
+			next;
+		}
+		if ($line =~ /^\tCleared:\s+(.+)/) {
+			emit_sample(
+				"pfctl_table_cleared_timestamp_seconds",
+				"gauge",
+				parse_timestamp($1),
+				"Timestamp for when the counters for this table were last reset",
+				"table", $table
+			);
+			next;
+		}
+		if ($line =~ /^\tReferences:\s+\[ Anchors: ([0-9]+)\s+Rules: ([0-9]+)\s+\]$/) {
+			emit_sample(
+				"pfctl_table_anchor_references",
+				"gauge",
+				$1,
+				"The number of anchors in the current pf ruleset referencing this table",
+				"table", $table
+			);
+			emit_sample(
+				"pfctl_table_ruleset_references",
+				"gauge",
+				$2,
+				"The number of rules in the current pf ruleset referencing this table",
+				"table", $table
+			);
+			next;
+		}
+		if ($line =~ /^\tEvaluations:\s+\[ NoMatch: ([0-9]+)\s+Match: ([0-9]+)\s+\]$/) {
+			emit_sample(
+				"pfctl_table_nomatch_evaluations",
+				"counter",
+				$1,
+				"The number of evaluations of this pf table resulting in a no-match",
+				"table", $table
+			);
+			emit_sample(
+				"pfctl_table_match_evaluations",
+				"counter",
+				$2,
+				"The number of evaluations of this pf table resulting in a match",
+				"table", $table
+			);
+			next;
+		}
+		if ($line =~ /^\t(In|Out)\/(Block|Pass|XPass):\s+\[ Packets: ([0-9]+)\s+Bytes: ([0-9]+)\s+\]/) {
+			my ($direction, $action, $packets, $bytes) = ($1, $2, $3, $4);
+			emit_sample(
+				"pfctl_table_packets_total",
+				"counter",
+				$packets,
+				"The number of packets for this table aggregated by traffic direction and firewall action",
+				"table", $table, "direction", $direction, "action", $action
+			);
+			emit_sample(
+				"pfctl_table_bytes_total",
+				"counter",
+				$bytes,
+				"The number of bytes for this table aggregated by traffic direction and firewall action",
+				"table", $table, "direction", $direction, "action", $action
+			);
+			next;
+		}
+	}
+}
+
+collect_info($info_file);
+collect_interfaces($interfaces_file);
+collect_rules($rules_file);
+collect_tables($tables_file);
+PERL
+}
+
+PFCTL_INFO_VERBOSE="$TMP.pfctl_info"
+PFCTL_INTERFACES_VERBOSE="$TMP.pfctl_interfaces"
+PFCTL_RULES_VERBOSE="$TMP.pfctl_rules"
+PFCTL_TABLES_VERBOSE="$TMP.pfctl_tables"
+
+PF_INFO="$(run "$PFCTL" -si)"
+PF_QUEUES="$(run "$PFCTL" -sq -v)"
+PF_MMAPE="$(run "$PFCTL" -a "$PF_ANCHOR" -sr)"
+run "$PFCTL" -vvs info >"$PFCTL_INFO_VERBOSE"
+run "$PFCTL" -vvs Interfaces >"$PFCTL_INTERFACES_VERBOSE"
+run "$PFCTL" -Pvs rules >"$PFCTL_RULES_VERBOSE"
+run "$PFCTL" -vvs Tables >"$PFCTL_TABLES_VERBOSE"
+IF_GIF="$(run "$IFCONFIG" "$GIF_IF")"
+IF_WAN="$(run "$IFCONFIG" "$WAN_IF")"
+LEASE="$(run "$DHCP6LEASECTL" -l "$LEASE_IF")"
+ROUTES="$(run "$NETSTAT" -rn)"
 DERIVE="$(run "$MAPED_DERIVE")"
 ANCHOR_FILE_CONTENT=""
 [ -r "$PF_ANCHOR_FILE" ] && ANCHOR_FILE_CONTENT="$(cat "$PF_ANCHOR_FILE")"
@@ -169,14 +486,14 @@ ANCHOR_FILE_CONTENT=""
 	printf '# Generated by mape-prometheus-metrics at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 	emit_help_type maped_up "Whether rcctl reports maped as running." gauge
-	if rcctl check maped >/dev/null 2>&1; then
+	if "$RCCTL" check maped >/dev/null 2>&1; then
 		emit_gauge maped_up 1
 	else
 		emit_gauge maped_up 0
 	fi
 
 	emit_help_type dhcp6leased_up "Whether rcctl reports dhcp6leased as running." gauge
-	if rcctl check dhcp6leased >/dev/null 2>&1; then
+	if "$RCCTL" check dhcp6leased >/dev/null 2>&1; then
 		emit_gauge dhcp6leased_up 1
 	else
 		emit_gauge dhcp6leased_up 0
@@ -233,6 +550,8 @@ ANCHOR_FILE_CONTENT=""
 		emit_labeled_gauge pf_counter_total "counter=\"$label_key\"" "$(pf_total "$key")"
 	done
 
+	emit_pfctl_exporter_metrics
+
 	printf '%s\n' "$PF_QUEUES" | awk '
 	    /^queue / {
 	        queue = $2
@@ -264,4 +583,5 @@ ANCHOR_FILE_CONTENT=""
 
 chmod 0644 "$TMP"
 mv "$TMP" "$OUT"
+rm -f "$TMP".pfctl_*
 trap - EXIT

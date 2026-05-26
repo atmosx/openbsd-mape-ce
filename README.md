@@ -6,7 +6,7 @@ This repository contains a collection of patches and scripts to add **Customer E
 
 ## Status
 
-This is an experimental project. Do not rely on this implementation for production use.
+This is an experimental project.
 
 ## 1. Setup
 
@@ -17,7 +17,7 @@ The following are required:
 3. Basic networking configuration.
 4. A companion application to automate the network setup process.
 
-The [packet filter patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has been publicly available since 2021. Applying the patch enables port mapping in MAP-E. Once `pf(4)` has been patched, use the Perl application to bring up a `gif(4)` interface.
+The [packet filter patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has been publicly available since 2021. Applying the patch enables port mapping. Once `pf(4)` has been patched, use the Perl application to bring up a `gif(4)` interface.
 
 Install the following packages and create the interface:
 
@@ -125,6 +125,33 @@ doas rcctl check maped
 ```
 
 See `maped(8)` for command-line options, files, and helper paths.
+
+## Prometheus metrics
+
+The `metrics/mape-prometheus-metrics` script writes MAP-E and PF metrics in
+Prometheus textfile format. Install it with:
+
+```ksh
+cd /usr/local/src/openbsd-mape-ce
+doas make metrics-install
+doas install -d -o root -g wheel -m 755 /var/prometheus/textfile
+```
+
+Run it from cron so the metrics file is refreshed regularly:
+
+```cron
+* * * * * /usr/local/sbin/mape-prometheus-metrics >/dev/null 2>&1
+```
+
+Serve the generated file with the `node_exporter` textfile collector:
+
+```ksh
+node_exporter --collector.textfile.directory=/var/prometheus/textfile
+```
+
+Then scrape the router's `node_exporter` from Prometheus. See
+`metrics/README.md` for example scrape config, httpd fallback serving, and the
+full metric list.
 
 Check the `gif0` interface and the `mape` anchor. The output should resemble:
 

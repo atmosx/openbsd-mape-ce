@@ -22,11 +22,10 @@ This keeps privileged commands such as `pfctl(8)`, `ifconfig(8)`, and
 
 ## Install
 
-Copy the script to the router:
+Install the collector on the router:
 
 ```ksh
-doas install -d -o root -g wheel -m 755 /usr/local/sbin
-doas install -o root -g wheel -m 755 metrics/mape-prometheus-metrics /usr/local/sbin/mape-prometheus-metrics
+doas make metrics-install
 ```
 
 Create the textfile directory:
@@ -145,6 +144,19 @@ It emits PF state gauges:
 
 - `pf_states`
 - `pf_halfopen_tcp`
+
+It also emits pfctl-exporter-compatible metrics parsed from `pfctl -vvs info`,
+`pfctl -vvs Interfaces`, `pfctl -Pvs rules`, and `pfctl -vvs Tables`. These use
+the same public names and Prometheus types as
+[`pfctl_exporter.py`](https://github.com/tykling/pfctl_exporter/blob/main/pfctl_exporter.py),
+for example:
+
+- `pfctl_state_table_current_entries`
+- `pfctl_state_table_searches_total`
+- `pfctl_interface_packets_total`
+- `pfctl_rule_evaluations_total`
+- `pfctl_table_flags_active`
+- `pfctl_table_match_evaluations_total`
 
 It emits PF cumulative counters using a `counter` label:
 

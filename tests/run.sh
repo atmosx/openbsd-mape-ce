@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 fixtures="$repo/tests/fixtures"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/maped-tests.XXXXXXXXXX")
 trap 'rm -rf "$tmp"' EXIT

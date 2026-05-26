@@ -14,18 +14,23 @@ MANMODE?=444
 
 SCRIPT=maped
 HEALTH=mape-health-snapshot
+METRICS=mape-prometheus-metrics
 HELPERS=maped-derive maped-up maped-down
 CONF=maped.conf
 RCSCRIPT=maped
 MAN=maped.8
 
-.PHONY: all test install install-bin install-conf install-rc install-man uninstall
+.PHONY: all test metrics-test install install-bin install-conf install-rc install-man metrics-install uninstall
 
 all:
 	@echo "Run 'make install' as root to install MAP-E CE maped."
 
 test:
 	sh tests/run.sh
+	$(MAKE) metrics-test
+
+metrics-test:
+	sh tests/metrics-run.sh
 
 install: install-bin install-conf install-rc install-man
 
@@ -55,9 +60,14 @@ install-man:
 	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(MANDIR)
 	install -o $(OWNER) -g $(GROUP) -m $(MANMODE) maped/$(MAN) $(DESTDIR)$(MANDIR)/$(MAN)
 
+metrics-install:
+	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(BINDIR)
+	install -o $(OWNER) -g $(GROUP) -m $(BINMODE) metrics/$(METRICS) $(DESTDIR)$(BINDIR)/$(METRICS)
+
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(SCRIPT)
 	rm -f $(DESTDIR)$(BINDIR)/$(HEALTH)
+	rm -f $(DESTDIR)$(BINDIR)/$(METRICS)
 	for helper in $(HELPERS); do \
 		rm -f $(DESTDIR)$(LIBEXECDIR)/$$helper; \
 	done
