@@ -13,7 +13,6 @@ RCMODE?=555
 MANMODE?=444
 
 SCRIPT=maped
-HEALTH=mape-health-snapshot
 METRICS=mape-prometheus-metrics
 HELPERS=maped-derive maped-up maped-down
 CONF=maped.conf
@@ -37,7 +36,6 @@ install: install-bin install-conf install-rc install-man
 install-bin:
 	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(BINDIR)
 	install -o $(OWNER) -g $(GROUP) -m $(BINMODE) maped/$(SCRIPT) $(DESTDIR)$(BINDIR)/$(SCRIPT)
-	install -o $(OWNER) -g $(GROUP) -m $(BINMODE) maped/$(HEALTH) $(DESTDIR)$(BINDIR)/$(HEALTH)
 	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(LIBEXECDIR)
 	for helper in $(HELPERS); do \
 		install -o $(OWNER) -g $(GROUP) -m $(BINMODE) maped/$$helper $(DESTDIR)$(LIBEXECDIR)/$$helper; \
@@ -66,7 +64,6 @@ metrics-install:
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(SCRIPT)
-	rm -f $(DESTDIR)$(BINDIR)/$(HEALTH)
 	rm -f $(DESTDIR)$(BINDIR)/$(METRICS)
 	for helper in $(HELPERS); do \
 		rm -f $(DESTDIR)$(LIBEXECDIR)/$$helper; \
