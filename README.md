@@ -2,8 +2,6 @@
 
 This repository contains a collection of patches and scripts to add **Customer Edge Mapping of Address and Port with Encapsulation**, widely known as MAP-E CE ([RFC7597](https://datatracker.ietf.org/doc/html/rfc7597)), support to [OpenBSD](https://www.openbsd.org/) 7.8.
 
-[![builds.sr.ht status](https://builds.sr.ht/~atmosx/openbsd-mape-ce/commits/main/.build.yml.svg)](https://builds.sr.ht/~atmosx/openbsd-mape-ce/commits/main/.build.yml?)
-
 ## Status
 
 This is an experimental project.
@@ -44,7 +42,7 @@ Clone the repository and apply the patches:
 ```ksh
 doas mkdir /usr/local/src
 cd /usr/local/src
-doas git clone https://git.sr.ht/~atmosx/openbsd-mape-ce
+doas git clone https://github.com/atmosx/openbsd-mape-ce
 cd /usr/src
 doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/pf-map-e-ce/mape78.patch
 doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/dhcp6leased-mape-softwire46-openbsd78.patch
@@ -176,7 +174,3 @@ pass in quick on pppoe0 inet6 proto ipencap from 2a02... to 2a02...
 pass out quick on gif0 inet from (gif0) to any flags S/SA
 pass in quick on gif0 inet from any to (gif0) flags S/SA
 ```
-
-## Help and testing
-
-Reports, questions and patches are welcome on the project's mailing list: `~atmosx/openbsd-mape-ce@lists.sr.ht`.
