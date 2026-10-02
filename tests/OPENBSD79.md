@@ -76,7 +76,7 @@ Checks on `vm02` (OpenBSD 7.9, arm64):
 Current patch SHA256 values (updated when patches change):
 
 ```text
-11febf940c050aa129cf60e2aa64a7060bc5b51da14cc0e625bb2bc7f061e99c  patch/pf-map-e-ce/mape79.patch
+bf4494f3133d3e79b2d9608c8e2a26d745df2aabcb87a22ae036e2e5b25768d9  patch/pf-map-e-ce/mape79.patch
 d0956acc4d1c26105aaea62a4dae585a48d50f4a08fa81b4b048e4b07b63b656  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
@@ -113,3 +113,10 @@ build directory on vm02 (OpenBSD 7.9 arm64). The engine regression extracts
 the actual packet parser and stubs state transitions; it checks acceptance
 with MAP-E enabled and rejection while disabled. It is not a live DHCP
 exchange or a kernel packet-path test. No running services were changed.
+
+The kernel-import fix adds the 7.9 `pf_ioctl.c` snapshot (CVS revision 1.430)
+to the source subset. Its patch is against that upstream file, not an
+addition to the OpenBSD tree. `pf_ioctl.o` and `pf_lb.o` compile with the
+7.9 arm64 GENERIC.MP flags, including `-Werror`, in a temporary directory.
+`make pf-test` also checks every byte-sized offset/length combination and
+PSID boundaries at the kernel validator. This does not exercise live ioctls.

@@ -377,3 +377,41 @@
  	char			 ifname[IFNAMSIZ];
  	struct pfi_kif		*kif;
  	int			 tblidx;
+--- a/sys/net/pf_ioctl.c
++++ b/sys/net/pf_ioctl.c
+@@ -107,6 +107,7 @@
+ void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *);
+ int			 pf_validate_range(u_int8_t, u_int16_t[2], int);
+ int			 pf_rule_copyin(struct pf_rule *, struct pf_rule *);
++int			 pf_mape_validate(struct pf_mape_port *);
+ int			 pf_rule_checkaf(struct pf_rule *);
+ u_int16_t		 pf_qname2qid(char *, int);
+ void			 pf_qid2qname(u_int16_t, char *);
+@@ -4048,9 +4049,27 @@
+ }
+ 
+ int
++pf_mape_validate(struct pf_mape_port *mape)
++{
++	if (mape->offset == 0)
++		return (mape->psidlen != 0 || mape->psid != 0 ? EINVAL : 0);
++	if (mape->offset > 15 || mape->psidlen == 0 ||
++	    mape->psidlen > 16 - mape->offset ||
++	    mape->psid >= (1U << mape->psidlen))
++		return (EINVAL);
++	return (0);
++}
++
++int
+ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to)
+ {
+ 	int i;
++
++	if (pf_mape_validate(&from->nat.mape) ||
++	    from->rdr.mape.offset || from->rdr.mape.psidlen ||
++	    from->rdr.mape.psid || from->route.mape.offset ||
++	    from->route.mape.psidlen || from->route.mape.psid)
++		return (EINVAL);
+ 
+ 	if (from->scrub_flags & PFSTATE_SETPRIO &&
+ 	    (from->set_prio[0] > IFQ_MAXPRIO ||

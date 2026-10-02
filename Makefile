@@ -31,6 +31,7 @@ test:
 
 pf-test:
 	sh tests/pf-nat-test.sh "$(OPENBSD_SRC)"
+	sh tests/pf-mape-validate-test.sh "$(OPENBSD_SRC)"
 
 metrics-test:
 	sh tests/metrics-run.sh
