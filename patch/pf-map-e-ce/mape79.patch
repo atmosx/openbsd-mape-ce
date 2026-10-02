@@ -219,7 +219,7 @@
  int			 pf_map_addr_states_increase(sa_family_t,
  				struct pf_pool *, struct pf_addr *);
  int			 pf_get_transaddr_af(struct pf_rule *,
-@@ -121,6 +127,32 @@
+@@ -121,6 +127,33 @@
  
  int
  pf_get_sport(struct pf_pdesc *pd, struct pf_rule *r,
@@ -247,13 +247,18 @@
 +	return (0);
 +}
 +
++/* Return 0 on success, 1 on exhaustion, or -1 on address lookup failure. */
 +int
 +pf_get_sport_range(struct pf_pdesc *pd, struct pf_rule *r,
      struct pf_addr *naddr, u_int16_t *nport, u_int16_t low, u_int16_t high,
      struct pf_src_node **sn)
  {
-@@ -137,21 +169,23 @@
- 		return (1);
+@@ -134,24 +167,26 @@
+ 	memset(&init_addr, 0, sizeof(init_addr));
+ 	if (pf_map_addr(pd->naf, r, &pd->nsaddr, naddr, &init_addr, sn, &r->nat,
+ 	    PF_SN_NAT))
+-		return (1);
++		return (-1);
  
  	if (pd->proto == IPPROTO_ICMP) {
 -		if (pd->ndport == htons(ICMP_ECHO)) {
@@ -284,7 +289,16 @@
  
  	do {
  		key.af = pd->naf;
-@@ -249,6 +283,40 @@
+@@ -238,7 +273,7 @@
+ 			 */
+ 			if (pf_map_addr(pd->naf, r, &pd->nsaddr, naddr,
+ 			    &init_addr, sn, &r->nat, PF_SN_NAT))
+-				return (1);
++				return (-1);
+ 			break;
+ 		case PF_POOL_NONE:
+ 		case PF_POOL_SRCHASH:
+@@ -249,6 +284,46 @@
  	} while (! PF_AEQ(&init_addr, naddr, pd->naf) );
  	return (1);					/* none available */
  }
@@ -295,7 +309,7 @@
 +{
 +	u_int16_t	 psmask, low, high, highmask;
 +	u_int16_t	 alow, ahigh, cut, tmp;
-+	int		 ashift, psidshift;
++	int		 ashift, psidshift, error;
 +
 +	ashift = 16 - r->nat.mape.offset;
 +	psidshift = ashift - r->nat.mape.psidlen;
@@ -310,14 +324,20 @@
 +	for (tmp = cut; tmp <= ahigh; ++tmp) {
 +		low = (tmp << ashift) | psmask;
 +		high = low | highmask;
-+		if (!pf_get_sport_range(pd, r, naddr, nport, low, high, sn))
++		error = pf_get_sport_range(pd, r, naddr, nport, low, high, sn);
++		if (error == 0)
 +			return (0);
++		if (error < 0)
++			return (1);
 +	}
 +	for (tmp = cut - 1; tmp >= alow; --tmp) {
 +		low = (tmp << ashift) | psmask;
 +		high = low | highmask;
-+		if (!pf_get_sport_range(pd, r, naddr, nport, low, high, sn))
++		error = pf_get_sport_range(pd, r, naddr, nport, low, high, sn);
++		if (error == 0)
 +			return (0);
++		if (error < 0)
++			return (1);
 +	}
 +	return (1);
 +}
@@ -325,7 +345,7 @@
  
  int
  pf_map_addr_sticky(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
-@@ -700,14 +768,8 @@
+@@ -700,14 +775,8 @@
  		/* XXX is this right? what if rtable is changed at the same
  		 * XXX time? where do I need to figure out the sport? */
  		nport = 0;
@@ -341,7 +361,7 @@
  		/* decrease least-connection state counter of the previous */
  		if ((*nr) != NULL && (*nr)->nat.addr.type != PF_ADDR_NONE &&
  		    ((*nr)->nat.opts & PF_POOL_TYPEMASK) ==
-@@ -782,14 +844,8 @@
+@@ -782,14 +851,8 @@
  
  	/* get source address and port */
  	nport = 0;

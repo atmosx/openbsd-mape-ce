@@ -151,6 +151,7 @@ pf_get_sport(struct pf_pdesc *pd, struct pf_rule *r,
 	return (0);
 }
 
+/* Return 0 on success, 1 on exhaustion, or -1 on address lookup failure. */
 int
 pf_get_sport_range(struct pf_pdesc *pd, struct pf_rule *r,
     struct pf_addr *naddr, u_int16_t *nport, u_int16_t low, u_int16_t high,
@@ -166,7 +167,7 @@ pf_get_sport_range(struct pf_pdesc *pd, struct pf_rule *r,
 	memset(&init_addr, 0, sizeof(init_addr));
 	if (pf_map_addr(pd->naf, r, &pd->nsaddr, naddr, &init_addr, sn, &r->nat,
 	    PF_SN_NAT))
-		return (1);
+		return (-1);
 
 	if (pd->proto == IPPROTO_ICMP) {
 		if (pd->ndport != htons(ICMP_ECHO))
@@ -272,7 +273,7 @@ pf_get_sport_range(struct pf_pdesc *pd, struct pf_rule *r,
 			 */
 			if (pf_map_addr(pd->naf, r, &pd->nsaddr, naddr,
 			    &init_addr, sn, &r->nat, PF_SN_NAT))
-				return (1);
+				return (-1);
 			break;
 		case PF_POOL_NONE:
 		case PF_POOL_SRCHASH:
@@ -290,7 +291,7 @@ pf_get_sport_mape(struct pf_pdesc *pd, struct pf_rule *r,
 {
 	u_int16_t	 psmask, low, high, highmask;
 	u_int16_t	 alow, ahigh, cut, tmp;
-	int		 ashift, psidshift;
+	int		 ashift, psidshift, error;
 
 	ashift = 16 - r->nat.mape.offset;
 	psidshift = ashift - r->nat.mape.psidlen;
@@ -305,14 +306,20 @@ pf_get_sport_mape(struct pf_pdesc *pd, struct pf_rule *r,
 	for (tmp = cut; tmp <= ahigh; ++tmp) {
 		low = (tmp << ashift) | psmask;
 		high = low | highmask;
-		if (!pf_get_sport_range(pd, r, naddr, nport, low, high, sn))
+		error = pf_get_sport_range(pd, r, naddr, nport, low, high, sn);
+		if (error == 0)
 			return (0);
+		if (error < 0)
+			return (1);
 	}
 	for (tmp = cut - 1; tmp >= alow; --tmp) {
 		low = (tmp << ashift) | psmask;
 		high = low | highmask;
-		if (!pf_get_sport_range(pd, r, naddr, nport, low, high, sn))
+		error = pf_get_sport_range(pd, r, naddr, nport, low, high, sn);
+		if (error == 0)
 			return (0);
+		if (error < 0)
+			return (1);
 	}
 	return (1);
 }

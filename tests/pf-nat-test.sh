@@ -74,7 +74,7 @@ check_range(struct pf_pdesc *pd, struct pf_rule *r, struct pf_addr *addr,
 	assert(((low >> shift) & ((1U << r->nat.mape.psidlen) - 1)) == r->nat.mape.psid);
 	assert(high == (low | ((1U << shift) - 1)));
 	assert(++calls <= expected_calls);
-	return exhausted;
+	return exhausted == 2 ? -1 : exhausted;
 }
 #define pf_get_sport_range check_range
 EOF
@@ -107,7 +107,7 @@ main(void)
 			assert(pf_get_sport_range(&pd, &r, &addr, &port, 1024, 1039, &sn) == 0);
 			assert(calls == 1 && addr.value == 42);
 			map_fail = 1;
-			assert(pf_get_sport_range(&pd, &r, &addr, &port, 1024, 1039, &sn) == 1);
+			assert(pf_get_sport_range(&pd, &r, &addr, &port, 1024, 1039, &sn) == -1);
 			map_fail = 0;
 			pd.ndport = htons(family ? ICMP6_ECHO_REQUEST : ICMP_ECHO);
 			assert(pf_get_sport_range(&pd, &r, &addr, &port, 1024, 1039, &sn) == 2);
@@ -121,11 +121,11 @@ main(void)
 				r.nat.mape.offset = offset;
 				r.nat.mape.psidlen = length;
 				r.nat.mape.psid = edge ? (1U << length) - 1 : 0;
-				for (mode = 0; mode < 2; mode++) {
+				for (mode = 0; mode < 3; mode++) {
 					calls = 0; exhausted = mode;
-					expected_calls = mode ? (1U << offset) - 1 : 1;
+					expected_calls = mode == 1 ? (1U << offset) - 1 : 1;
 					memset(visited, 0, sizeof(visited));
-					assert(pf_get_sport_mape(&pd, &r, &addr, &port, &sn) == mode);
+					assert(pf_get_sport_mape(&pd, &r, &addr, &port, &sn) == (mode != 0));
 					assert(calls == expected_calls);
 				}
 			}
@@ -138,4 +138,4 @@ EOF
 ${CC:-cc} ${CFLAGS:-} -Wall -Wextra -Wno-unused-variable -Wno-unused-parameter \
     -o "$tmp/test" "$tmp/test.c"
 "$tmp/test"
-printf '%s\n' 'ok - PF ICMP address mapping and MAP-E allocation boundaries/exhaustion'
+printf '%s\n' 'ok - PF ICMP address mapping and MAP-E allocation boundaries/exhaustion/address failure'

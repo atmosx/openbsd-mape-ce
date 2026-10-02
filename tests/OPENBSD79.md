@@ -26,7 +26,7 @@ make pf-test OPENBSD_SRC=/usr/src
 stubbed types and address/state dependencies. It checks IPv4/IPv6 non-echo
 address selection, address-selection failure, ordinary echo identifier
 ranges, preservation of MAP-E echo ranges, all supported offset/length
-combinations at minimum/maximum PSIDs, and both first-success and exhausted
+combinations at minimum/maximum PSIDs, and first-success, exhausted, and address-selection-failure
 port-set searches. It does not replace kernel packet tests.
 
 Run the DHCP lease-parser and Softwire46 fuzz regressions:
@@ -76,7 +76,7 @@ Checks on `vm02` (OpenBSD 7.9, arm64):
 Current patch SHA256 values (updated when patches change):
 
 ```text
-bf4494f3133d3e79b2d9608c8e2a26d745df2aabcb87a22ae036e2e5b25768d9  patch/pf-map-e-ce/mape79.patch
+b6ac038048b253e6c31de18170d1acea7040168f76ef442f0dc3d34ff5fecc12  patch/pf-map-e-ce/mape79.patch
 a9b4e9d8f291864ae7445bc24d06c6f9d5bbdc62343c27a1522a598e2089ace6  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
@@ -120,3 +120,15 @@ addition to the OpenBSD tree. `pf_ioctl.o` and `pf_lb.o` compile with the
 7.9 arm64 GENERIC.MP flags, including `-Werror`, in a temporary directory.
 `make pf-test` also checks every byte-sized offset/length combination and
 PSID boundaries at the kernel validator. This does not exercise live ioctls.
+
+The allocator now stops a MAP-E search on address-selection failure instead
+of retrying every port block. The extracted allocator test checks one helper
+call for this failure across every supported offset/length pair. It passes
+on OpenBSD 7.9 arm64 and under ASan/UBSan on the development host. This is a
+call-count regression, not a throughput benchmark. Port exhaustion still
+requires a bounded search of the permitted set.
+
+Follow-up DHCP parser tests also cover unchanged and changed-prefix malformed
+renewals, changed servers, expiry, restart confirmation, and multiple BR
+options. The daemon builds and all DHCP regressions pass on OpenBSD 7.9 arm64.
+The original deployment gate above remains outstanding for the revised tree.
