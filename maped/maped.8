@@ -28,7 +28,7 @@
 .Nm
 watches DHCPv6 MAP-E lease state and configures the local Customer Edge
 runtime.
-When lease data changes, or when the configured runtime state is missing,
+When lease data changes, or when the configured runtime state differs,
 .Nm
 runs
 .Pa /usr/local/libexec/maped/maped-up
@@ -113,7 +113,8 @@ range 1280 through 8192; otherwise the helper fails before changing interfaces.
 The generated anchor clamps IPv4 TCP MSS to this MTU minus 40.
 For a PPPoE MTU of 1492, these values are 1452 and 1412 respectively.
 This is initial interface sizing, not tunnel path MTU discovery.
-It does not detect smaller downstream links or continuously monitor WAN MTU.
+Health checks recompute it when the WAN MTU changes.
+This does not discover smaller downstream links.
 Use a lower explicit MTU when the path requires it.
 .It Va LEASE_FILE
 Optional lease file used only as a change notification trigger.

@@ -194,8 +194,8 @@ Do not subtract PPPoE overhead a second time.
 An existing `GIF_MTU="1452"` remains an explicit override. Use an override
 if the downstream path needs a smaller value. Values outside OpenBSD's
 GIF range (1280–8192) fail before interface changes; an automatic result
-below 1280 is not silently rounded up. Auto selection is not continuous
-WAN-MTU monitoring or end-to-end tunnel PMTU discovery.
+below 1280 is not silently rounded up. Health checks also recompute auto sizing after WAN-MTU changes. This is not
+end-to-end tunnel PMTU discovery.
 
 The generated PF anchor clamps outgoing IPv4 TCP SYN MSS to the selected
 MTU minus 40 (1412 for MTU 1452). Remove any obsolete fixed clamp from the
@@ -243,3 +243,12 @@ prevents concurrent instances using the same directory.
 The daemon and all helpers accept literal shell-style configuration values.
 Quotes and comments are supported; expansions and shell commands are rejected.
 Restart to reload configuration. Each operation uses a frozen configuration.
+
+### Runtime reconciliation
+
+Health checks compare tunnel endpoints, IPv4 addressing, the CE address,
+tunnel MTU, NAT port-set parameters, TCP MSS and the IPv4 default route against
+the frozen desired configuration. Equivalent IPv6 spellings compare equally.
+Automatic MTU follows changes to the local WAN MTU; explicit overrides remain
+fixed. This is local state repair, not kernel tunnel PMTU discovery. While the
+service is active, maped expects the IPv4 default route to use its GIF tunnel.

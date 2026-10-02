@@ -3,7 +3,7 @@ use warnings;
 use Test::More;
 use FindBin;
 use lib "$FindBin::Bin/../maped";
-use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease);
+use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 my ($rc, $out) = command(2, 1024, $^X, '-e', 'print "ok"');
 is($rc, 0, 'successful child');
 is($out, 'ok', 'capture output');
@@ -76,4 +76,31 @@ eval { live_lease($oldctl, 'pppoe0') };
 like($@, qr/exact DHCP lifetime/, 'rounded lifetime is not authorization');
 eval { live_lease($live, 'other0') };
 like($@, qr/missing DHCP state/, 'wrong interface rejected');
+
+is(effective_mtu('auto', 'pppoe0: flags=UP mtu 1492'), 1452, 'auto MTU');
+is(effective_mtu('1452', 'pppoe0: flags=UP mtu 1500'), 1452, 'explicit MTU');
+eval { effective_mtu('auto', 'pppoe0: mtu 1280') };
+like($@, qr/invalid GIF MTU/, 'do not round unsafe auto MTU upward');
+my %plan = (GIF_IF => 'gif0', GIF_MTU => 1452, CE_IPV6 => '2001:db8::1',
+    BR_IPV6 => '2001:db8::2', MAPE_IPV4 => '192.0.2.1', PSID_OFFSET => 6,
+    PSID_LEN => 8, PSID => 42);
+my $gif = "gif0: flags=8051<UP,POINTOPOINT> mtu 1452\n tunnel: inet6 2001:db8::1 --> 2001:db8::2 ttl 64\n inet 192.0.2.1 --> 0.0.0.1 netmask 0xffffffff\n";
+my $wan = ' inet6 2001:0db8:0:0:0:0:0:1 prefixlen 128';
+my $rules = "match out on gif0 inet from any to any nat-to (gif0) map-e-portset 6/8/42\nmatch out on gif0 inet proto tcp flags S/SA scrub (max-mss 1412)\n";
+my $route = " interface: gif0\n gateway: 0.0.0.1\n";
+ok(has_ipv6($wan, $plan{CE_IPV6}), 'equivalent IPv6 spellings match');
+is(runtime_mismatch(\%plan, $gif, $wan, $rules, $route), undef, 'matching runtime');
+for my $case (
+    [0, '1452', '1400', qr/MTU/],
+    [0, 'UP,', '', qr/not UP/],
+    [0, '2001:db8::2', '2001:db8::3', qr/endpoints/],
+    [0, '192.0.2.1', '192.0.2.2', qr/IPv4 address/],
+    [1, '2001:0db8:0:0:0:0:0:1', '2001:db8::3', qr/alias/],
+    [2, '6/8/42', '6/8/43', qr/NAT parameters/],
+    [2, 'max-mss 1412', 'max-mss 1400', qr/MSS/],
+    [3, 'gif0', 'em0', qr/default route/]) {
+	my @actual = ($gif, $wan, $rules, $route);
+	$actual[$case->[0]] =~ s/\Q$case->[1]\E/$case->[2]/;
+	like(runtime_mismatch(\%plan, @actual), $case->[3], "detect runtime mismatch: $case->[1]");
+}
 done_testing;

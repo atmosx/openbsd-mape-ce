@@ -33,15 +33,17 @@ writefile("$tmp/live", $live);
 for my $name (qw(ctl up down ifconfig pfctl route)) {
 	my $body = {
 	    ctl => "[ ! -f '$tmp/fail' ] || exit 1\ncat '$tmp/live'\n",
-	    up => "echo up >> '$tmp/calls'\ntest -s \"\$2\"\n",
-	    down => "echo down >> '$tmp/calls'\n",
-	    ifconfig => "case \"\$1\" in\npppoe0) echo 'pppoe0: flags=UP mtu 1492';;\n*) echo 'gif0: flags=<UP> mtu 1452'; echo ' tunnel: inet6 2001:db8:100:4200:0:c000:242:0 --> 2001:db8:ffff::1 ttl 64'; echo ' inet 192.0.2.66 --> 0.0.0.1 netmask 0xffffffff';;\nesac\n",
-	    pfctl => "echo 'match out on gif0 inet from any to any nat-to (gif0) map-e-portset 6/8/42'\necho 'match out on gif0 inet proto tcp flags S/SA scrub (max-mss 1412)'\n",
+	    up => "echo up >> '$tmp/calls'\ntest -s \"\$2\"\n. \"\$1\"\necho \"\$GIF_MTU\" > '$tmp/gif_mtu'\ntouch '$tmp/installed'\n",
+	    down => "echo down >> '$tmp/calls'\nrm -f '$tmp/installed'\n",
+	    ifconfig => "case \"\$1\" in\npppoe0) echo \"pppoe0: flags=UP mtu \$(cat '$tmp/wan_mtu')\"; [ ! -f '$tmp/installed' ] || echo ' inet6 2001:db8:100:4200:0:c000:242:0 prefixlen 128';;\n*) echo \"gif0: flags=<UP> mtu \$(cat '$tmp/gif_mtu')\"; echo ' tunnel: inet6 2001:db8:100:4200:0:c000:242:0 --> 2001:db8:ffff::1 ttl 64'; echo ' inet 192.0.2.66 --> 0.0.0.1 netmask 0xffffffff';;\nesac\n",
+	    pfctl => "echo 'match out on gif0 inet from any to any nat-to (gif0) map-e-portset 6/8/42'\necho \"match out on gif0 inet proto tcp flags S/SA scrub (max-mss \$((\$(cat '$tmp/gif_mtu') - 40)))\"\n",
 	    route => "echo ' interface: gif0'\necho ' gateway: 0.0.0.1'\n",
 	}->{$name};
 	writefile("$tmp/$name", "#!/bin/sh\n$body"); chmod 0755, "$tmp/$name";
 }
 writefile("$tmp/calls", '');
+writefile("$tmp/wan_mtu", "1492\n");
+writefile("$tmp/gif_mtu", "1452\n");
 my %conf = (WAN_IF => 'pppoe0', LEASE_IF => 'pppoe0', GIF_IF => 'gif0',
     GIF_MTU => 'auto', LAN_NET => '192.168.1.0/24', MAPED_STATE_DIR => "$tmp/state",
     MAPED_UP => "$tmp/up", MAPED_DOWN => "$tmp/down", MAPED_DERIVE => "$repo/maped/maped-derive",
@@ -57,6 +59,14 @@ ok(-f "$tmp/state/applied.conf", 'ownership recorded');
 ($rc, $out) = once();
 is($rc, 0, 'unchanged healthy state succeeds') or diag $out;
 is(readfile("$tmp/calls"), "up\n", 'unchanged state not recreated');
+writefile("$tmp/wan_mtu", "1500\n");
+($rc, $out) = once();
+is($rc, 0, 'WAN MTU change repaired') or diag $out;
+is(readfile("$tmp/gif_mtu"), "1460\n", 'auto MTU recomputed');
+writefile("$tmp/wan_mtu", "1492\n");
+($rc, $out) = once();
+is($rc, 0, 'WAN MTU restored') or diag $out;
+writefile("$tmp/calls", "up\n");
 writefile("$tmp/live", "pppoe0 [Init]\n");
 ($rc, $out) = once();
 is($rc, 0, 'confirmed withdrawal succeeds') or diag $out;

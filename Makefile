@@ -34,8 +34,6 @@ test:
 	$(MAKE) metrics-test
 
 pf-test:
-	perl tests/maped.t
-	perl tests/maped-daemon.t
 	sh tests/pf-nat-test.sh "$(OPENBSD_SRC)"
 	sh tests/pf-mape-validate-test.sh "$(OPENBSD_SRC)"
 
@@ -51,7 +49,6 @@ install-bin:
 	for helper in $(HELPERS); do \
 		install -o $(OWNER) -g $(GROUP) -m $(BINMODE) maped/$$helper $(DESTDIR)$(LIBEXECDIR)/$$helper; \
 	done
-
 	install -o $(OWNER) -g $(GROUP) -m 444 maped/Maped.pm $(DESTDIR)$(LIBEXECDIR)/Maped.pm
 
 install-conf:

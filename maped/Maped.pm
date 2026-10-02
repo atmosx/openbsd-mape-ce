@@ -2,12 +2,12 @@
 package Maped;
 use strict;
 use warnings;
-use Socket qw(AF_INET AF_INET6 inet_pton);
+use Socket qw(AF_INET AF_INET6 inet_pton inet_ntop);
 use Exporter 'import';
 use IO::Select;
 use POSIX qw(WNOHANG setpgid);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
-our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease);
+our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 
 sub status_text {
 	my ($rc) = @_;
@@ -191,5 +191,61 @@ sub live_lease {
 	my %lease = parse_lease($text);
 	die "incomplete live MAP-E provisioning\n" unless complete_lease(\%lease);
 	return ('active', $seconds, \%lease);
+}
+
+sub effective_mtu {
+	my ($value, $wan) = @_;
+	$value = 'auto' unless defined $value && $value ne '';
+	if ($value eq 'auto') {
+		my ($header) = split /\n/, $wan;
+		my ($mtu) = $header =~ /\bmtu (\d+)\b/;
+		die "cannot determine WAN MTU\n" unless defined $mtu && $mtu <= 65535;
+		$value = $mtu - 40;
+	}
+	die "invalid GIF MTU\n" unless $value =~ /^[1-9][0-9]{3}$/ && $value >= 1280 && $value <= 8192;
+	return 0 + $value;
+}
+
+sub same_ipv6 {
+	my ($a, $b) = @_;
+	my $pa = inet_pton(AF_INET6, $a // '');
+	my $pb = inet_pton(AF_INET6, $b // '');
+	return defined $pa && defined $pb && $pa eq $pb;
+}
+
+sub has_ipv6 {
+	my ($text, $address) = @_;
+	while ($text =~ /\binet6\s+([0-9a-fA-F:]+)(?:%\S+)?\s+prefixlen\s+\d+\b/g) {
+		return 1 if same_ipv6($1, $address);
+	}
+	return 0;
+}
+
+sub runtime_mismatch {
+	my ($plan, $gif, $wan, $rules, $route) = @_;
+	my ($header) = split /\n/, $gif;
+	return 'tunnel is not UP' unless $header =~ /<[^>]*\bUP\b[^>]*>/;
+	my ($mtu) = $header =~ /\bmtu (\d+)\b/;
+	return 'tunnel MTU differs' unless defined $mtu && $mtu == $plan->{GIF_MTU};
+	my ($ce, $br) = $gif =~ /\btunnel: inet6 ([0-9a-fA-F:]+) --> ([0-9a-fA-F:]+)\b/;
+	return 'tunnel endpoints differ' unless same_ipv6($ce, $plan->{CE_IPV6}) && same_ipv6($br, $plan->{BR_IPV6});
+	my $peer = $plan->{MAPED_PEER_IPV4} || '0.0.0.1';
+	return 'tunnel IPv4 address differs' unless $gif =~ /\binet \Q$plan->{MAPE_IPV4}\E --> \Q$peer\E\s/;
+	return 'CE alias is missing' unless has_ipv6($wan, $plan->{CE_IPV6});
+	my $portset = join '/', @$plan{qw(PSID_OFFSET PSID_LEN PSID)};
+	my @nat = grep { /\bmap-e-portset\b/ } split /\n/, $rules;
+	return 'MAP-E NAT rules are missing' unless @nat;
+	for my $rule (@nat) {
+		return 'MAP-E NAT parameters differ' unless
+		    $rule =~ /\bon \Q$plan->{GIF_IF}\E\s/ &&
+		    $rule =~ /\bnat-to \(\Q$plan->{GIF_IF}\E\)/ &&
+		    $rule =~ /\bmap-e-portset \Q$portset\E(?:\s|$)/;
+	}
+	my $mss = $plan->{GIF_MTU} - 40;
+	return 'TCP MSS clamp differs' unless $rules =~ /^.*\bon \Q$plan->{GIF_IF}\E\s.*\bmax-mss $mss\)/m;
+	return 'IPv4 default route differs' unless
+	    $route =~ /^\s*interface: \Q$plan->{GIF_IF}\E\s*$/m &&
+	    $route =~ /^\s*gateway: \Q$peer\E\s*$/m;
+	return undef;
 }
 1;

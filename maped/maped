@@ -19,7 +19,7 @@ use warnings;
 use Getopt::Std;
 use FindBin;
 use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
-use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease);
+use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 use Fcntl qw(:flock);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
 use File::Temp qw(tempfile);
@@ -285,9 +285,11 @@ sub run_once {
 	}
 	my ($wan_rc, $wan) = run_command($ifconfig, $conf{WAN_IF});
 	if ($wan_rc) { unlink $path; log_warn("cannot inspect WAN: $wan"); return 0; }
-	$plan{MAPED_ALIAS_OWNED} = $previous{MAPED_ALIAS_OWNED} //
-	    ($wan =~ /\binet6\s+\Q$plan{CE_IPV6}\E(?:\s|%)/ ? 0 : 1);
-	my $runtime_reason = runtime_reconfigure_reason(\%plan);
+	$plan{MAPED_ALIAS_OWNED} = ($previous{MAPED_ALIAS_OWNED} ||
+	    !has_ipv6($wan, $plan{CE_IPV6})) ? 1 : 0;
+	$plan{GIF_MTU} = eval { effective_mtu($conf{GIF_MTU}, $wan) };
+	if ($@) { unlink $path; log_warn($@); return 0; }
+	my $runtime_reason = runtime_reconfigure_reason(\%plan, $wan);
 	if (defined $runtime_reason && $runtime_reason =~ /^cannot /) {
 		unlink $path;
 		log_warn("runtime health check failed: $runtime_reason");
@@ -318,20 +320,18 @@ sub run_once {
 }
 
 sub runtime_reconfigure_reason {
-	my $gif = $conf{GIF_IF} || "";
-	return "GIF_IF is not configured" if $gif eq "";
-
+	my ($plan, $wan) = @_;
+	my $gif = $plan->{GIF_IF} || "";
+	return "cannot configure without GIF_IF" if $gif eq "";
 	my ($if_rc, $ifconfig_out) = run_command($ifconfig, $gif);
 	return "cannot run $ifconfig $gif: $ifconfig_out" if $if_rc == -1;
 	return "$gif does not exist" if $if_rc != 0;
-	return "$gif is not UP" if $ifconfig_out !~ /\bUP\b/;
-
 	my ($pf_rc, $rules) = run_command($pfctl, "-a", "mape", "-sr");
-	return "cannot run $pfctl: $rules" if $pf_rc == -1;
-	return "cannot read pf anchor mape" if $pf_rc != 0;
-	return "pf anchor mape has no MAP-E portset rule" if $rules !~ /\bmap-e-portset\b/;
-
-	return undef;
+	return "cannot read PF anchor: $rules" if $pf_rc != 0;
+	my ($route_rc, $routing) = run_command($route, '-n', 'get', '-inet', 'default');
+	return "cannot run route: $routing" if $route_rc == -1;
+	$routing = '' if $route_rc;
+	return runtime_mismatch($plan, $ifconfig_out, $wan, $rules, $routing);
 }
 
 sub load_kqueue {
