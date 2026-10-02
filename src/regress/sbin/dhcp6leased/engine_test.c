@@ -107,6 +107,12 @@ main(void)
 {
 	struct dhcp6leased_iface iface;
 	struct imsg_dhcp packet;
+	struct iface_ia_conf ia_conf;
+	struct dhcp_option_hdr opt;
+	struct dhcp_iapd iapd;
+	struct dhcp_iaprefix prefix;
+	size_t len;
+	int scenario;
 	/* REPLY, server ID, then MAP-E with one BR and a /42 rule. */
 	static const uint8_t reply[] = {
 	    7, 0, 0, 0, 0, 2, 0, 3, 0, 1, 1,
@@ -121,6 +127,10 @@ main(void)
 	int enabled;
 
 	SIMPLEQ_INIT(&iface_conf.iface_ia_list);
+	memset(&ia_conf, 0, sizeof(ia_conf));
+	ia_conf.prefix_len = 64;
+	iface_conf.ia_count = 1;
+	SIMPLEQ_INSERT_TAIL(&iface_conf.iface_ia_list, &ia_conf, entry);
 	for (enabled = 0; enabled < 2; enabled++) {
 		memset(&iface, 0, sizeof(iface));
 		memset(&packet, 0, sizeof(packet));
@@ -129,10 +139,57 @@ main(void)
 		iface.state = IF_REQUESTING;
 		iface_conf.request_mape = enabled;
 		memcpy(packet.packet, reply, sizeof(reply));
-		packet.len = sizeof(reply);
+		len = sizeof(reply);
+		memset(&iapd, 0, sizeof(iapd));
+		memset(&prefix, 0, sizeof(prefix));
+		prefix.prefix_len = 56;
+		prefix.vltime = htonl(600);
+		prefix.pltime = htonl(300);
+		assert(inet_pton(AF_INET6, "2001:db8:100::",
+		    &prefix.prefix) == 1);
+		opt.code = htons(DHO_IA_PD);
+		opt.len = htons(sizeof(iapd) + sizeof(opt) + sizeof(prefix));
+		memcpy(packet.packet + len, &opt, sizeof(opt));
+		len += sizeof(opt);
+		memcpy(packet.packet + len, &iapd, sizeof(iapd));
+		len += sizeof(iapd);
+		opt.code = htons(DHO_IA_PREFIX);
+		opt.len = htons(sizeof(prefix));
+		memcpy(packet.packet + len, &opt, sizeof(opt));
+		len += sizeof(opt);
+		memcpy(packet.packet + len, &prefix, sizeof(prefix));
+		packet.len = len + sizeof(prefix);
 		parse_dhcp(&iface, &packet);
 		assert(iface.state == IF_BOUND);
 		assert(iface.mape.valid == enabled);
+	}
+
+	/* Retain malformed renewal data only for the same, unexpired lease. */
+	for (scenario = 0; scenario < 5; scenario++) {
+		packet.packet[18] = 16;
+		iface.state = IF_REQUESTING;
+		parse_dhcp(&iface, &packet);
+		assert(iface.mape.valid);
+		memcpy(iface.pds, iface.new_pds, sizeof(iface.pds));
+		iface.state = IF_RENEWING;
+		packet.packet[18] = 15; /* Invalid BR length inside a valid TLV. */
+		switch (scenario) {
+		case 1:
+			iface.pds[0].prefix.s6_addr[7] ^= 1;
+			break;
+		case 2:
+			iface.serverid[2] ^= 1;
+			break;
+		case 3:
+			iface.request_time.tv_sec -= 601;
+			break;
+		case 4:
+			iface.state = IF_REBOOTING;
+			break;
+		}
+		parse_dhcp(&iface, &packet);
+		assert(iface.state == IF_BOUND);
+		assert(iface.mape.valid == (scenario == 0));
 	}
 	return (0);
 }

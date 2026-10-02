@@ -688,9 +688,6 @@ engine_update_iface(struct imsg_ifinfo *imsg_ifinfo)
 		if (iface->pds[0].prefix_len == 0)
 			memcpy(iface->pds, imsg_ifinfo->pds,
 			    sizeof(iface->pds));
-		if (iface_conf->request_mape && !iface->mape.valid)
-			memcpy(&iface->mape, &imsg_ifinfo->mape,
-			    sizeof(iface->mape));
 
 		got_lease = 0;
 		for (i = 0; i < iface_conf->ia_count; i++) {
@@ -924,9 +921,20 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 		    &pd->prefix, ntopbuf, INET6_ADDRSTRLEN), pd->prefix_len);
 	}
 
-	if (mape_invalid && !iface->new_mape.valid)
-		memcpy(&iface->new_mape, &iface->mape,
-		    sizeof(iface->new_mape));
+	/* A malformed renewal must not extend an unrelated MAP-E lease. */
+	if (mape_invalid && !iface->new_mape.valid &&
+	    (iface->state == IF_RENEWING || iface->state == IF_REBINDING) &&
+	    serverid_len == iface->serverid_len &&
+	    memcmp(serverid, iface->serverid, serverid_len) == 0 &&
+	    prefixcmp(iface->pds, iface->new_pds, iface_conf->ia_count) == 0) {
+		struct timespec now, elapsed;
+
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		timespecsub(&now, &iface->request_time, &elapsed);
+		if (elapsed.tv_sec >= 0 && elapsed.tv_sec < iface->lease_time)
+			memcpy(&iface->new_mape, &iface->mape,
+			    sizeof(iface->new_mape));
+	}
 
 	switch (hdr.msg_type) {
 	case DHCPSOLICIT:
@@ -1474,6 +1482,8 @@ deconfigure_interfaces(struct dhcp6leased_iface *iface)
 		}
 	}
 	memset(iface->pds, 0, sizeof(iface->pds));
+	memset(&iface->mape, 0, sizeof(iface->mape));
+	write_iface_lease(iface);
 }
 
 void
