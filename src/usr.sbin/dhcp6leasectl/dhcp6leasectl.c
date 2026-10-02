@@ -51,13 +51,14 @@ void		 show_interface_msg(struct ctl_engine_info *);
 void		 show_mape_msg(struct s46_mape *);
 
 struct imsgbuf	*ibuf;
+int		 machine;
 
 __dead void
 usage(void)
 {
 	extern char *__progname;
 
-	fprintf(stderr, "usage: %s [-l] [-s socket] [-w maxwait] interface\n",
+	fprintf(stderr, "usage: %s [-lm] [-s socket] [-w maxwait] interface\n",
 	    __progname);
 	exit(1);
 }
@@ -75,10 +76,13 @@ main(int argc, char *argv[])
 	const char		*errstr;
 
 	sockname = _PATH_CTRL_SOCKET;
-	while ((ch = getopt(argc, argv, "ls:w:")) != -1) {
+	while ((ch = getopt(argc, argv, "lms:w:")) != -1) {
 		switch (ch) {
 		case 'l':
 			lFlag = 1;
+			break;
+		case 'm':
+			machine = 1;
 			break;
 		case 's':
 			sockname = optarg;
@@ -210,6 +214,9 @@ show_interface_msg(struct ctl_engine_info *cei)
 		s = cei->lease_time - diff.tv_sec;
 		if (s < 0)
 			s = 0;
+
+		if (machine)
+			printf("\tlease-seconds: %lld\n", s);
 
 		if ( s > 86400 ) {
 			d = s / 86400;

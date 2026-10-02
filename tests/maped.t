@@ -3,7 +3,7 @@ use warnings;
 use Test::More;
 use FindBin;
 use lib "$FindBin::Bin/../maped";
-use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text);
+use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease);
 my ($rc, $out) = command(2, 1024, $^X, '-e', 'print "ok"');
 is($rc, 0, 'successful child');
 is($out, 'ok', 'capture output');
@@ -54,4 +54,26 @@ for my $bad ('X=$HOME', 'X="$(id)"', 'X=`id`', 'export X=1', 'X=1; id', 'X="unte
 	eval { parse_config($bad) };
 	ok($@, "reject unsupported syntax: $bad");
 }
+
+my $live = "pppoe0 [Bound]\nIA_PD 0: 2001:db8:100::/56\nlease-seconds: 60\nMAP-E\nBR: 2001:db8::1\nrule: flags 0 ea-len 8 192.0.2.0/24 2001:db8:100::/48\n";
+my ($kind, $seconds, $current) = live_lease($live, 'pppoe0');
+is($kind, 'active', 'live bound lease authorizes service');
+is($seconds, 60, 'exact remaining lifetime');
+for my $state ('Renewing', 'Rebinding') {
+	(my $text = $live) =~ s/Bound/$state/;
+	($kind) = live_lease($text, 'pppoe0');
+	is($kind, 'active', "$state remains authorized");
+}
+for my $state ('Down', 'Init', 'Requesting', 'Rebooting', 'IPv6 only') {
+	($kind) = live_lease("pppoe0 [$state]\n", 'pppoe0');
+	is($kind, 'withdrawn', "$state withdraws service");
+}
+(my $expired = $live) =~ s/lease-seconds: 60/lease-seconds: 0/;
+($kind) = live_lease($expired, 'pppoe0');
+is($kind, 'withdrawn', 'zero lifetime withdraws service');
+(my $oldctl = $live) =~ s/lease-seconds: 60/lease 7 days/;
+eval { live_lease($oldctl, 'pppoe0') };
+like($@, qr/exact DHCP lifetime/, 'rounded lifetime is not authorization');
+eval { live_lease($live, 'other0') };
+like($@, qr/missing DHCP state/, 'wrong interface rejected');
 done_testing;

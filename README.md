@@ -220,3 +220,26 @@ This remains a single-domain, hub-and-spoke implementation, not mesh support.
 `maped-up` receives a private snapshot from the daemon; derivation does not
 reread changing lease sources during that operation. Standalone derivation
 can read a lease file or control output, but never merges their fields.
+
+### Live lease authority and withdrawal
+
+Upgrade the patched `dhcp6leasectl` together with `maped`: the daemon now uses
+`-l -m` and its exact `lease-seconds:` field, not the rounded lifetime display.
+A persisted DHCP lease file is only a change-notification trigger, never
+proof of an active lease. Bound, Renewing and Rebinding leases remain usable
+until their confirmed expiry. Read failures do not extend that deadline.
+On restart, a failed live query retires recorded configuration because the
+new process has no remaining in-memory proof of validity.
+
+`MAPED_STATE_DIR/applied.conf` records ownership before helper mutations.
+Withdrawal and failed applies run `maped-down` against that record. The helper
+preserves a default route on a different interface and a CE alias that existed
+before maped configured service. Reserve the GIF interface and `mape` PF anchor
+for maped. Legacy `lease.state` files alone are not ownership records: obtain
+a successful live configuration after upgrade before relying on auto-cleanup.
+The state directory is root-owned and must not be group/world writable; a lock
+prevents concurrent instances using the same directory.
+
+The daemon and all helpers accept literal shell-style configuration values.
+Quotes and comments are supported; expansions and shell commands are rejected.
+Restart to reload configuration. Each operation uses a frozen configuration.

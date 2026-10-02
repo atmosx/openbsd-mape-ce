@@ -1,18 +1,30 @@
 #!/bin/sh
+# Retire only resources recorded by maped, never an arbitrary default route.
 set -eu
-
 [ "$(id -u)" -eq 0 ] || exec doas "$0" "$@"
-
-CONF="${1:-/etc/maped.conf}"
+CONF="${1:-/var/db/maped/applied.conf}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 CONFIG_TEXT=$("$SCRIPT_DIR/maped-config" "$CONF")
 eval "$CONFIG_TEXT"
+: "${GIF_IF:?}" "${WAN_IF:?}" "${CE_IPV6:?}" "${BR_IPV6:?}"
+IFCONFIG="${IFCONFIG:-ifconfig}"
+PFCTL="${PFCTL:-pfctl}"
+ROUTE="${ROUTE:-route}"
 
-route delete -inet default >/dev/null 2>&1 || true
-pfctl -a mape -F rules >/dev/null 2>&1 || true
-
-if ifconfig "$GIF_IF" >/dev/null 2>&1; then
-	ifconfig "$GIF_IF" destroy
+# The mape anchor is reserved exclusively for this daemon.
+"$PFCTL" -a mape -F rules
+GIF_CONFIG=$("$IFCONFIG" "$GIF_IF" 2>/dev/null) || GIF_CONFIG=""
+if printf '%s\n' "$GIF_CONFIG" | grep -Fq "tunnel: inet6 $CE_IPV6 --> $BR_IPV6 "; then
+	DEFAULT=$("$ROUTE" -n get -inet default 2>/dev/null) || DEFAULT=""
+	if printf '%s\n' "$DEFAULT" | grep -Eq "^[[:space:]]*interface: $GIF_IF$"; then
+		"$ROUTE" delete -inet default -ifp "$GIF_IF" "${MAPED_PEER_IPV4:-0.0.0.1}"
+	fi
+	"$IFCONFIG" "$GIF_IF" destroy
 fi
-
-echo "MAP-E is down"
+if [ "${MAPED_ALIAS_OWNED:-0}" = 1 ]; then
+	WAN_CONFIG=$("$IFCONFIG" "$WAN_IF")
+	if printf '%s\n' "$WAN_CONFIG" | grep -Fq "inet6 $CE_IPV6 "; then
+		"$IFCONFIG" "$WAN_IF" inet6 "$CE_IPV6" delete
+	fi
+fi
+echo "MAP-E ownership retired"

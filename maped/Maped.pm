@@ -7,7 +7,7 @@ use Exporter 'import';
 use IO::Select;
 use POSIX qw(WNOHANG setpgid);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
-our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text parse_config config_text);
+our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease);
 
 sub status_text {
 	my ($rc) = @_;
@@ -173,5 +173,23 @@ sub config_text {
 		$value =~ s/'/'"'"'/g;
 		"$_='$value'\n";
 	} sort keys %$config;
+}
+
+# Only current control output authorizes service. Rounded human-readable
+# lifetimes and persisted restart hints cannot establish an expiry deadline.
+sub live_lease {
+	my ($text, $iface) = @_;
+	my ($state) = $text =~ /^\Q$iface\E \[([^\]]+)\]$/m;
+	die "missing DHCP state for $iface\n" unless defined $state;
+	return ('withdrawn', 0, {}) if $state =~ /^(?:Down|Init|Requesting|Rebooting|IPv6 only)$/;
+	die "unknown DHCP state: $state\n" unless $state =~ /^(?:Bound|Renewing|Rebinding)$/;
+	return ('withdrawn', 0, {}) unless $text =~ /^\s*IA_PD /m && $text =~ /^\s*MAP-E\s*$/m;
+	my ($seconds) = $text =~ /^\s*lease-seconds: (\d+)\s*$/m;
+	die "missing exact DHCP lifetime; install dhcp6leasectl with -m support\n"
+	    unless defined $seconds && $seconds <= 4294967295;
+	return ('withdrawn', 0, {}) if $seconds == 0;
+	my %lease = parse_lease($text);
+	die "incomplete live MAP-E provisioning\n" unless complete_lease(\%lease);
+	return ('active', $seconds, \%lease);
 }
 1;

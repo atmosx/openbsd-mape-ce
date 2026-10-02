@@ -116,15 +116,22 @@ This is initial interface sizing, not tunnel path MTU discovery.
 It does not detect smaller downstream links or continuously monitor WAN MTU.
 Use a lower explicit MTU when the path requires it.
 .It Va LEASE_FILE
-Optional
-.Xr dhcp6leased 8
-lease file to watch.
+Optional lease file used only as a change notification trigger.
+Persisted lease contents do not authorize service.
+The daemon queries current
+.Xr dhcp6leasectl 8
+state with
+.Fl l Fl m
+and requires an exact remaining lifetime.
+Install the matching patched control utility before upgrading maped.
 .It Va PF_ANCHOR_FILE
 Path used to store the generated
 .Xr pf 4
 anchor.
 .It Va MAPED_UP
 Runtime configuration helper.
+.It Va MAPED_DOWN
+Ownership-aware withdrawal helper.
 .It Va MAPED_DERIVE
 MAP-E parameter derivation helper.
 .It Va MAPED_STATE_DIR
@@ -137,6 +144,18 @@ interface.
 Log level for
 .Nm .
 .El
+.Pp
+Confirmed withdrawal or expiry removes the owned MAP-E configuration.
+A temporary control-query failure retains service only until the last
+confirmed monotonic deadline.
+After restart, a failed query retires previously recorded ownership because
+there is no in-memory proof that the old lease remains valid.
+The state directory must be owned by root and not writable by other users.
+Only one daemon may own it at a time.
+Reserve the configured GIF interface and the mape PF anchor for this daemon.
+Cleanup deletes the default route only when it still belongs to the recorded
+tunnel, and removes the CE alias only when maped originally added it.
+Legacy lease.state files alone are not ownership records.
 .Sh FILES
 .Bl -tag -width /usr/local/libexec/maped/maped-derive -compact
 .It Pa /etc/maped.conf

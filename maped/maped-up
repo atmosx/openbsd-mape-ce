@@ -13,6 +13,9 @@ export MAPED_SNAPSHOT
 DERIVE_COMMAND="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
 [ -x "$DERIVE_COMMAND" ] || DERIVE_COMMAND="$SCRIPT_DIR/maped-derive"
 MAPED_PEER_IPV4="${MAPED_PEER_IPV4:-${MAPE_PEER_IPV4:-0.0.0.1}}"
+IFCONFIG="${IFCONFIG:-ifconfig}"
+PFCTL="${PFCTL:-pfctl}"
+ROUTE="${ROUTE:-route}"
 
 export PD_PREFIX PD_IF LEASE_FILE LEASE_IF WAN_IF DHCP6LEASECTL
 export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_OFFSET BR_IPV6
@@ -29,7 +32,7 @@ echo "  PSID_LEN=$PSID_LEN"
 echo "  PSID=$PSID"
 
 # Resolve and validate the MTU before changing interfaces or PF rules.
-if ! WAN_CONFIG=$(ifconfig "$WAN_IF"); then
+if ! WAN_CONFIG=$("$IFCONFIG" "$WAN_IF"); then
 	echo "$WAN_IF does not exist" >&2
 	exit 1
 fi
@@ -60,19 +63,19 @@ fi
 TCP_MSS=$((GIF_MTU - 40))
 echo "  GIF_MTU=$GIF_MTU TCP_MSS=$TCP_MSS"
 
-if ! ifconfig "$WAN_IF" | grep -q "$CE_IPV6"; then
-	ifconfig "$WAN_IF" inet6 alias "$CE_IPV6" prefixlen 128
+if ! "$IFCONFIG" "$WAN_IF" | grep -q "$CE_IPV6"; then
+	"$IFCONFIG" "$WAN_IF" inet6 alias "$CE_IPV6" prefixlen 128
 fi
 
-if ifconfig "$GIF_IF" >/dev/null 2>&1; then
-	ifconfig "$GIF_IF" destroy
+if "$IFCONFIG" "$GIF_IF" >/dev/null 2>&1; then
+	"$IFCONFIG" "$GIF_IF" destroy
 fi
 
-ifconfig "$GIF_IF" create
-ifconfig "$GIF_IF" tunnel "$CE_IPV6" "$BR_IPV6"
-ifconfig "$GIF_IF" inet "$MAPE_IPV4" "$MAPED_PEER_IPV4" netmask 255.255.255.255
-ifconfig "$GIF_IF" mtu "$GIF_MTU"
-ifconfig "$GIF_IF" up
+"$IFCONFIG" "$GIF_IF" create
+"$IFCONFIG" "$GIF_IF" tunnel "$CE_IPV6" "$BR_IPV6"
+"$IFCONFIG" "$GIF_IF" inet "$MAPE_IPV4" "$MAPED_PEER_IPV4" netmask 255.255.255.255
+"$IFCONFIG" "$GIF_IF" mtu "$GIF_MTU"
+"$IFCONFIG" "$GIF_IF" up
 
 mkdir -p "$(dirname "$PF_ANCHOR_FILE")"
 PF_ANCHOR_TMP="$(mktemp "$PF_ANCHOR_FILE.XXXXXXXXXX")"
@@ -91,15 +94,15 @@ pass out quick on $GIF_IF inet from ($GIF_IF) to any keep state
 pass in  quick on $GIF_IF inet from any to ($GIF_IF) keep state
 EOF
 
-pfctl -a mape -nf "$PF_ANCHOR_TMP"
-pfctl -a mape -f "$PF_ANCHOR_TMP"
+"$PFCTL" -a mape -nf "$PF_ANCHOR_TMP"
+"$PFCTL" -a mape -f "$PF_ANCHOR_TMP"
 mv "$PF_ANCHOR_TMP" "$PF_ANCHOR_FILE"
 trap - EXIT
 
-route delete -inet default >/dev/null 2>&1 || true
-route add -inet default -ifp "$GIF_IF" "$MAPED_PEER_IPV4"
+"$ROUTE" delete -inet default >/dev/null 2>&1 || true
+"$ROUTE" add -inet default -ifp "$GIF_IF" "$MAPED_PEER_IPV4"
 
 echo "MAP-E is up"
-ifconfig "$GIF_IF"
-route -n show -inet | grep default || true
-pfctl -a mape -sr
+"$IFCONFIG" "$GIF_IF"
+"$ROUTE" -n show -inet | grep default || true
+"$PFCTL" -a mape -sr

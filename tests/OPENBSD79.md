@@ -77,7 +77,7 @@ Current patch SHA256 values (updated when patches change):
 
 ```text
 b6ac038048b253e6c31de18170d1acea7040168f76ef442f0dc3d34ff5fecc12  patch/pf-map-e-ce/mape79.patch
-c57e8f01cd41621604721e36ee94ce1ca6b9ff367809b3ab96f86c46eb3c0ba7  patch/dhcp6leased-mape-softwire46-openbsd79.patch
+67383e95e0639fdbdcf3c2d82f25c21b45cf8c6e11c1b6907703a0b566995a3d  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
 The full arm64 GENERIC.MP kernel build completed successfully (exit status 0).
@@ -149,3 +149,14 @@ Deployment checks still required: validate the full parent/anchor ruleset
 with the patched pfctl, capture TCP SYN MSS and oversized IPv4/IPv6 traffic,
 and verify ICMPv6 Packet Too Big is admitted. The tests do not establish
 kernel tunnel PMTU/error-relay behavior; that work remains deferred.
+
+### Daemon lifecycle validation
+
+`make test` now exercises the daemon without root: a temporary copy adjusts
+only UID admission checks and all privileged tools are mocked. Tests cover
+live activation, no-op health checks, withdrawal, failed applies, restart
+without live proof, temporary read failures and monotonic expiry. Separate
+mocked cleanup tests preserve unrelated routes and pre-existing aliases.
+OpenBSD runs exercise the real pledge/unveil path; File::Temp requires the
+parent's fattr promise to secure snapshot files. No live configuration is
+changed. The control utility's new `-m` output must be deployed with maped.

@@ -19,7 +19,9 @@ use warnings;
 use Getopt::Std;
 use FindBin;
 use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
-use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text);
+use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease);
+use Fcntl qw(:flock);
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
 use File::Temp qw(tempfile);
 use File::Path qw(make_path);
 use POSIX qw(setsid strftime);
@@ -56,12 +58,27 @@ my $dhcp6leasectl = resolve_command($conf{DHCP6LEASECTL} || "dhcp6leasectl",
     "/usr/sbin/dhcp6leasectl");
 my $ifconfig = resolve_command($conf{IFCONFIG} || "ifconfig", "/sbin/ifconfig");
 my $pfctl = resolve_command($conf{PFCTL} || "pfctl", "/sbin/pfctl");
+my $maped_down = resolve_command($conf{MAPED_DOWN} || "/usr/local/libexec/maped/maped-down",
+    "/usr/local/libexec/maped/maped-down");
+my $maped_derive = resolve_command($conf{MAPED_DERIVE} || "/usr/local/libexec/maped/maped-derive",
+    "/usr/local/libexec/maped/maped-derive");
+my $route = resolve_command($conf{ROUTE} || "route", "/sbin/route");
+my $applied_file = "$state_dir/applied.conf";
+my $lease_deadline;
+$conf{IFCONFIG} = $ifconfig;
+$conf{PFCTL} = $pfctl;
+$conf{ROUTE} = $route;
+$conf{MAPED_DERIVE} = $maped_derive;
 my %log_rank = (debug => 0, info => 1, warn => 2);
 $log_level = lc($conf{MAPED_LOG_LEVEL} || $conf{MAPE_LOG_LEVEL} || "info") if $log_level eq "";
 usage() unless exists $log_rank{$log_level};
 my $have_kqueue = $force_poll ? 0 : load_kqueue();
 
-make_path($state_dir) unless -d $state_dir;
+make_path($state_dir, {mode => 0700}) unless -d $state_dir;
+my @state_stat = stat($state_dir);
+die "maped: insecure state directory\n" if $state_stat[4] != 0 || ($state_stat[2] & 0022);
+open my $lock, '>>', "$state_dir/lock" or die "maped: lock: $!";
+flock($lock, LOCK_EX | LOCK_NB) or die "maped: another instance owns $state_dir\n";
 
 if ($daemon) {
 	daemonize();
@@ -73,12 +90,12 @@ if ($daemon) {
 
 sandbox_parent();
 
-exit(run_once() ? 0 : 1) if $once;
-run_once();
+exit(cycle() ? 0 : 1) if $once;
+cycle();
 
 while (1) {
 	wait_for_change();
-	run_once();
+	cycle();
 }
 
 sub usage {
@@ -150,7 +167,7 @@ sub sandbox_parent {
 		unveil($path, $perms) or die "maped: unveil $path: $!\n";
 	}
 	unveil() or die "maped: lock unveil: $!\n";
-	pledge(qw(rpath wpath cpath proc exec unix)) or die "maped: pledge: $!\n";
+	pledge(qw(rpath wpath cpath fattr proc exec unix)) or die "maped: pledge: $!\n";
 	log_debug("pledge/unveil enabled for parent");
 }
 
@@ -158,6 +175,9 @@ sub sandbox_unveil_rules {
 	my @rules = (
 	    ["/bin/sh", "x"],
 	    [$maped_up, "x"],
+	    [$maped_down, "x"],
+	    [$maped_derive, "x"],
+	    [$route, "x"],
 	    [$ifconfig, "x"],
 	    [$pfctl, "x"],
 	    [$dhcp6leasectl, "x"],
@@ -177,52 +197,124 @@ sub dirname {
 	return $path ne "" ? $path : "/";
 }
 
+sub atomic_write {
+	my ($path, $text) = @_;
+	my ($fh, $tmp) = tempfile("state.XXXXXXXX", DIR => $state_dir);
+	print {$fh} $text or die "maped: write $tmp: $!";
+	close $fh or die "maped: close $tmp: $!";
+	rename $tmp, $path or die "maped: rename $path: $!";
+}
+
+sub withdraw {
+	my ($reason) = @_;
+	$lease_deadline = undef;
+	return 1 unless -e $applied_file;
+	log_info("withdrawing MAP-E: $reason");
+	my ($rc, $out) = command(30, 1024 * 1024, $maped_down, $applied_file);
+	if ($rc) {
+		log_warn("withdrawal failed: " . status_text($rc) . ": $out");
+		return 0;
+	}
+	unlink $state_file if -e $state_file;
+	unlink $applied_file or die "maped: remove ownership record: $!";
+	return 1;
+}
+
+sub cycle {
+	my $result = run_once();
+	if (defined $lease_deadline && clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline) {
+		withdraw('confirmed lease expired');
+		return 0;
+	}
+	return $result;
+}
+
 sub run_once {
-	my $snapshot = eval { lease_snapshot() };
-	if ($@) { log_warn("cannot read provisioning: $@"); return 0; }
-	if (!complete_snapshot($snapshot)) {
-		log_warn("lease data incomplete; waiting");
+	if (defined $lease_deadline && clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline) {
+		return 0 unless withdraw('confirmed lease expired');
+	}
+	my $started = clock_gettime(CLOCK_MONOTONIC);
+	my ($kind, $seconds, $lease);
+	my $ok = eval {
+		my $iface = $conf{LEASE_IF} || $conf{WAN_IF} || die "LEASE_IF is required\n";
+		my ($rc, $out) = run_command($dhcp6leasectl, '-l', '-m', $iface);
+		die "control query failed: " . status_text($rc) . ": $out" if $rc;
+		($kind, $seconds, $lease) = live_lease($out, $iface);
+		1;
+	};
+	if (!$ok) {
+		log_warn("cannot establish current provisioning: $@");
+		# A read failure cannot renew authorization. After restart there is
+		# no in-memory proof of validity, so retire our recorded state.
+		withdraw('no remaining confirmed lease') if !defined $lease_deadline ||
+		    clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline;
 		return 0;
 	}
-
-	my $old = read_state();
-	my $runtime_reason = runtime_reconfigure_reason();
-	if (defined $runtime_reason && $runtime_reason =~ /^cannot run /) {
-		log_warn("MAP-E runtime health check failed: $runtime_reason");
-		return 0;
-	}
-	if (defined $old && $old eq $snapshot && !defined $runtime_reason) {
-		log_debug("lease data unchanged and MAP-E runtime looks healthy");
-		return 1;
-	}
-
-	if (!defined $old || $old ne $snapshot) {
-		log_info("MAP-E lease data changed; running $maped_up");
-		log_debug("new lease state:\n$snapshot");
-	} else {
-		log_info("MAP-E lease data unchanged but runtime needs repair: $runtime_reason");
-	}
+	return withdraw('DHCP withdrew the service') if $kind eq 'withdrawn';
+	$lease_deadline = $started + $seconds;
+	return withdraw('lease expired during query') if clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline;
+	my $snapshot = lease_text($lease);
 	my ($fh, $path) = tempfile("lease.XXXXXXXX", DIR => $state_dir);
-	my %lease = map { split /=/, $_, 2 } split /\n/, $snapshot;
-	print {$fh} lease_text(\%lease) or die "maped: snapshot write: $!";
+	print {$fh} $snapshot or die "maped: snapshot write: $!";
 	close $fh or die "maped: snapshot close: $!";
-	my ($cfh, $cpath) = tempfile("config.XXXXXXXX", DIR => $state_dir);
-	print {$cfh} config_text(\%conf) or die "maped: config write: $!";
-	close $cfh or die "maped: config close: $!";
-	my ($rc, $out) = run_command($maped_up, $cpath, $path);
-	unlink $cpath;
-	unlink $path;
-	if ($rc == 0) {
-		write_state($snapshot);
-		log_info("MAP-E reconfiguration complete");
-		log_debug("maped-up output:\n$out") if $out ne "";
+	my ($rc, $out);
+	{
+		local %ENV = (%ENV, %conf, MAPED_SNAPSHOT => $path);
+		($rc, $out) = run_command($maped_derive);
+	}
+	if ($rc) {
+		unlink $path;
+		log_warn("derivation failed: " . status_text($rc) . ": $out");
+		withdraw('new provisioning cannot be applied');
+		return 0;
+	}
+	my %derived = eval { parse_config($out) };
+	if ($@ || !defined $derived{CE_IPV6} || !defined $derived{MAPE_IPV4}) {
+		unlink $path;
+		log_warn('invalid derivation output');
+		return 0;
+	}
+	my %plan = (%conf, %derived);
+	my %previous = -e $applied_file ? read_conf($applied_file) : ();
+	# Retire old ownership before changing a prefix, BR, or interface.
+	if (%previous && grep { ($previous{$_} // '') ne ($plan{$_} // '') }
+	    qw(CE_IPV6 BR_IPV6 MAPE_IPV4 WAN_IF GIF_IF PSID_OFFSET PSID_LEN PSID)) {
+		if (!withdraw('provisioning changed')) { unlink $path; return 0; }
+		$lease_deadline = $started + $seconds;
+		%previous = ();
+	}
+	my ($wan_rc, $wan) = run_command($ifconfig, $conf{WAN_IF});
+	if ($wan_rc) { unlink $path; log_warn("cannot inspect WAN: $wan"); return 0; }
+	$plan{MAPED_ALIAS_OWNED} = $previous{MAPED_ALIAS_OWNED} //
+	    ($wan =~ /\binet6\s+\Q$plan{CE_IPV6}\E(?:\s|%)/ ? 0 : 1);
+	my $runtime_reason = runtime_reconfigure_reason(\%plan);
+	if (defined $runtime_reason && $runtime_reason =~ /^cannot /) {
+		unlink $path;
+		log_warn("runtime health check failed: $runtime_reason");
+		return 0;
+	}
+	my $old = read_state();
+	my $desired = config_text(\%plan) . $snapshot;
+	if (defined $old && $old eq $desired && !defined $runtime_reason && %previous) {
+		unlink $path;
 		return 1;
 	}
-
-	my $exit = status_text($rc);
-	log_warn("MAP-E reconfiguration failed: $exit");
-	log_warn("maped-up output:\n$out") if $out ne "";
-	return 0;
+	log_info('applying current MAP-E provisioning');
+	# Record ownership before mutations, so partial failures can be retired.
+	atomic_write($applied_file, config_text(\%plan));
+	my $budget = $lease_deadline - clock_gettime(CLOCK_MONOTONIC);
+	if ($budget <= 0) { unlink $path; return withdraw('lease expired before apply'); }
+	($rc, $out) = command($budget < 30 ? $budget : 30, 1024 * 1024,
+	    $maped_up, $applied_file, $path);
+	unlink $path;
+	if ($rc || clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline) {
+		log_warn("reconfiguration failed: " . status_text($rc) . ": $out");
+		withdraw('failed or expired apply');
+		return 0;
+	}
+	atomic_write($state_file, $desired);
+	log_info('MAP-E reconfiguration complete');
+	return 1;
 }
 
 sub runtime_reconfigure_reason {
@@ -256,8 +348,14 @@ sub load_kqueue {
 }
 
 sub wait_for_change {
+	my $wait = $interval;
+	if (defined $lease_deadline) {
+		my $left = int($lease_deadline - clock_gettime(CLOCK_MONOTONIC));
+		$wait = $left if $left < $wait;
+		$wait = 1 if $wait < 1;
+	}
 	if ($have_kqueue && $conf{LEASE_FILE} && -r $conf{LEASE_FILE}) {
-		if (wait_for_kqueue_change($conf{LEASE_FILE})) {
+		if (wait_for_kqueue_change($conf{LEASE_FILE}, $wait)) {
 			log_debug("kqueue reported lease file event");
 			return;
 		}
@@ -265,11 +363,11 @@ sub wait_for_change {
 	}
 
 	log_debug("polling sleep for ${interval}s");
-	sleep $interval;
+	sleep $wait;
 }
 
 sub wait_for_kqueue_change {
-	my ($path) = @_;
+	my ($path, $wait) = @_;
 	open my $fh, "<", $path or return 0;
 
 	my $kq = eval { IO::KQueue->new() };
@@ -282,42 +380,13 @@ sub wait_for_kqueue_change {
 	my $notes = &NOTE_WRITE | &NOTE_DELETE | &NOTE_EXTEND | &NOTE_ATTRIB | &NOTE_RENAME | &NOTE_REVOKE;
 	my $ok = eval {
 		$kq->EV_SET(fileno($fh), &EVFILT_VNODE, $flags, $notes, 0, 0);
-		$kq->kevent($interval * 1000);
+		$kq->kevent($wait * 1000);
 		1;
 	} ? 1 : 0;
 	POSIX::close($$kq);
 	close $fh;
 
 	return $ok;
-}
-
-sub lease_snapshot {
-	my %lease;
-
-	if ($conf{LEASE_FILE} && -r $conf{LEASE_FILE}) {
-		log_debug("reading lease file $conf{LEASE_FILE}");
-		%lease = parse_lease(read_file($conf{LEASE_FILE}));
-	}
-
-	if (!complete_lease(\%lease)) {
-		my $lease_if = $conf{LEASE_IF} || $conf{WAN_IF};
-		if ($lease_if) {
-			log_debug("reading dhcp6leasectl for $lease_if");
-			my %cmd_lease = parse_lease(read_cmd($dhcp6leasectl, "-l", $lease_if));
-			%lease = %cmd_lease;
-		}
-	}
-
-	return join "\n", map { "$_=$lease{$_}" } grep { exists $lease{$_} } qw(
-	    PD_PREFIX BR_IPV6 MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN
-	    MAP_IPV6_PREFIX MAP_IPV6_PLEN PSID_OFFSET DHCP_PSID_LEN DHCP_PSID
-	);
-}
-
-sub complete_snapshot {
-	my ($snapshot) = @_;
-	my %lease = map { split /=/, $_, 2 } grep { $_ ne "" } split /\n/, $snapshot;
-	return complete_lease(\%lease);
 }
 
 sub read_file {
@@ -333,21 +402,18 @@ sub read_cmd {
 }
 
 sub run_command {
-	return command(30, 1024 * 1024, @_);
+	my $budget = 30;
+	if (defined $lease_deadline) {
+		my $left = $lease_deadline - clock_gettime(CLOCK_MONOTONIC);
+		return (-1, 'confirmed lease expired') if $left <= 0;
+		$budget = $left if $left < $budget;
+	}
+	return command($budget, 1024 * 1024, @_);
 }
 
 sub read_state {
 	return undef unless -r $state_file;
 	return read_file($state_file);
-}
-
-sub write_state {
-	my ($snapshot) = @_;
-	my $tmp = "$state_file.$$";
-	open my $fh, ">", $tmp or die "maped: cannot write $tmp: $!\n";
-	print {$fh} $snapshot;
-	close $fh or die "maped: cannot close $tmp: $!\n";
-	rename $tmp, $state_file or die "maped: cannot rename $tmp to $state_file: $!\n";
 }
 
 sub log_debug {

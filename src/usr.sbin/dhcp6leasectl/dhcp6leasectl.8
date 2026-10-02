@@ -24,7 +24,7 @@
 .Nd control the dhcp6leased client
 .Sh SYNOPSIS
 .Nm
-.Op Fl l
+.Op Fl lm
 .Op Fl s Ar socket
 .Op Fl w Ar maxwait
 .Ar interface
@@ -44,6 +44,10 @@ instead of requesting a new lease.
 The output includes delegated prefixes and, when present, MAP-E
 Softwire46 parameters learned by
 .Xr dhcp6leased 8 .
+.It Fl m
+Include the exact remaining lease lifetime as a
+.Cm lease-seconds:
+line, in addition to the human-readable summary.
 .It Fl s Ar socket
 Use
 .Ar socket

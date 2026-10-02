@@ -27,12 +27,15 @@ all:
 
 test:
 	perl tests/maped.t
+	perl tests/maped-daemon.t
+	sh tests/maped-down-test.sh
 	sh tests/maped-up-test.sh
 	sh tests/run.sh
 	$(MAKE) metrics-test
 
 pf-test:
 	perl tests/maped.t
+	perl tests/maped-daemon.t
 	sh tests/pf-nat-test.sh "$(OPENBSD_SRC)"
 	sh tests/pf-mape-validate-test.sh "$(OPENBSD_SRC)"
 
