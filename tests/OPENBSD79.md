@@ -133,10 +133,19 @@ renewals, changed servers, expiry, restart confirmation, and multiple BR
 options. The daemon builds and all DHCP regressions pass on OpenBSD 7.9 arm64.
 The original deployment gate above remains outstanding for the revised tree.
 
-### DHCP message validation
+### DHCP validation and initial tunnel MTU
 
 The engine regressions check RFC 9915 §§16, 16.3, 16.10, and 21.21:
 matching transaction/client IDs, required client ID, unknown message types,
 and IA_PD timer ordering (including zero/equal timers and ignoring an invalid
 IA_PD while accepting another usable one).
 
+`make test` also runs `tests/maped-up-test.sh`. Networking and UID commands
+are mocked; these tests need no root and never configure interfaces or PF.
+They cover PPPoE 1492 -> GIF 1452/MSS 1412, WAN 1500 -> GIF 1460/MSS 1420,
+explicit overrides, GIF bounds, and failures before network mutations.
+
+Deployment checks still required: validate the full parent/anchor ruleset
+with the patched pfctl, capture TCP SYN MSS and oversized IPv4/IPv6 traffic,
+and verify ICMPv6 Packet Too Big is admitted. The tests do not establish
+kernel tunnel PMTU/error-relay behavior; that work remains deferred.

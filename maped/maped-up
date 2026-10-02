@@ -25,10 +25,37 @@ echo "  PSID_OFFSET=$PSID_OFFSET"
 echo "  PSID_LEN=$PSID_LEN"
 echo "  PSID=$PSID"
 
-if ! ifconfig "$WAN_IF" >/dev/null 2>&1; then
-	echo "$WAN_IF does not exist"
+# Resolve and validate the MTU before changing interfaces or PF rules.
+if ! WAN_CONFIG=$(ifconfig "$WAN_IF"); then
+	echo "$WAN_IF does not exist" >&2
 	exit 1
 fi
+GIF_MTU="${GIF_MTU:-auto}"
+if [ "$GIF_MTU" = auto ]; then
+	WAN_MTU=$(printf '%s\n' "$WAN_CONFIG" | awk '
+	    NR == 1 { for (i = 1; i < NF; i++)
+	        if ($i == "mtu") { print $(i + 1); exit } }')
+	case "$WAN_MTU" in
+	""|*[!0-9]*|0*|??????*)
+		echo "cannot determine MTU for $WAN_IF" >&2
+		exit 1 ;;
+	esac
+	GIF_MTU=$((WAN_MTU - 40))
+fi
+case "$GIF_MTU" in
+*[!0-9]*|0*) GIF_MTU=invalid ;;
+esac
+case "$GIF_MTU" in
+????) ;;
+*) echo "GIF_MTU must be auto or an integer from 1280 to 8192" >&2
+   exit 1 ;;
+esac
+if [ "$GIF_MTU" -lt 1280 ] || [ "$GIF_MTU" -gt 8192 ]; then
+	echo "GIF_MTU $GIF_MTU is outside the gif(4) range 1280..8192" >&2
+	exit 1
+fi
+TCP_MSS=$((GIF_MTU - 40))
+echo "  GIF_MTU=$GIF_MTU TCP_MSS=$TCP_MSS"
 
 if ! ifconfig "$WAN_IF" | grep -q "$CE_IPV6"; then
 	ifconfig "$WAN_IF" inet6 alias "$CE_IPV6" prefixlen 128
@@ -49,6 +76,8 @@ PF_ANCHOR_TMP="$(mktemp "$PF_ANCHOR_FILE.XXXXXXXXXX")"
 trap 'rm -f "$PF_ANCHOR_TMP"' EXIT
 
 cat > "$PF_ANCHOR_TMP" <<EOF
+match out on $GIF_IF inet proto tcp flags S/SA scrub (max-mss $TCP_MSS)
+
 match out on $GIF_IF inet from ($GIF_IF) to any nat-to ($GIF_IF) map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID
 match out on $GIF_IF inet from $LAN_NET to any nat-to ($GIF_IF) map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID
 

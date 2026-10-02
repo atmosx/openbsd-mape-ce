@@ -92,6 +92,21 @@ interface to create.
 .It Va GIF_MTU
 MTU assigned to
 .Va GIF_IF .
+The default,
+.Cm auto ,
+uses the current
+.Va WAN_IF
+MTU minus the 40-byte IPv6 encapsulation header each time the helper runs.
+The route to the border relay must use that WAN interface.
+A numeric value overrides automatic selection.
+The result must be in the
+.Xr gif 4
+range 1280 through 8192; otherwise the helper fails before changing interfaces.
+The generated anchor clamps IPv4 TCP MSS to this MTU minus 40.
+For a PPPoE MTU of 1492, these values are 1452 and 1412 respectively.
+This is initial interface sizing, not tunnel path MTU discovery.
+It does not detect smaller downstream links or continuously monitor WAN MTU.
+Use a lower explicit MTU when the path requires it.
 .It Va LEASE_FILE
 Optional
 .Xr dhcp6leased 8
