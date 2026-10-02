@@ -3,7 +3,7 @@ use warnings;
 use Test::More;
 use FindBin;
 use lib "$FindBin::Bin/../maped";
-use Maped qw(command status_text parse_lease complete_lease lease_text);
+use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text);
 my ($rc, $out) = command(2, 1024, $^X, '-e', 'print "ok"');
 is($rc, 0, 'successful child');
 is($out, 'ok', 'capture output');
@@ -41,4 +41,17 @@ like($@, qr/without rule/, 'orphan parameters rejected');
 my %zero = parse_lease($base . $narrow . "mape_portparams 0 0 123\n");
 ok(complete_lease(\%zero), 'zero offset and length are complete');
 is($zero{DHCP_PSID}, 0, 'zero-length PSID field ignored');
+
+my %cfg = parse_config("VALUE=\"hello # world\" # comment\nEMPTY=\nPATH='/some path'\n");
+is($cfg{VALUE}, 'hello # world', 'quoted comment preserved');
+is($cfg{EMPTY}, '', 'empty literal');
+my %again = parse_config(config_text(\%cfg));
+is_deeply(\%again, \%cfg, 'canonical config round trip');
+%cfg = (VALUE => "apostrophe's # value");
+%again = parse_config(config_text(\%cfg));
+is_deeply(\%again, \%cfg, 'literal quotes round trip');
+for my $bad ('X=$HOME', 'X="$(id)"', 'X=`id`', 'export X=1', 'X=1; id', 'X="unterminated') {
+	eval { parse_config($bad) };
+	ok($@, "reject unsupported syntax: $bad");
+}
 done_testing;

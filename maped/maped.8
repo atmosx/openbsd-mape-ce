@@ -75,9 +75,14 @@ reads
 External commands are limited to 30 seconds and 1 MiB of captured output.
 Timed-out helper process groups are terminated.
 .Sh CONFIGURATION
-The configuration file is a
-.Xr sh 1
-file read by the helper programs.
+The daemon and helpers accept the same literal shell-style assignments.
+Values may be unquoted, single-quoted, or double-quoted.
+Comments outside quotes are supported.
+Variable expansion, command substitution, escapes, and shell commands
+are rejected; use explicit values instead.
+Restart the daemon after editing configuration.
+It passes a frozen, safely quoted configuration to each helper,
+so an edit cannot change only half of an operation.
 The following variables are commonly set:
 .Bl -tag -width PF_ANCHOR_FILE
 .It Va WAN_IF

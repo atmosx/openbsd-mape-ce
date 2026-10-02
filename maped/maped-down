@@ -4,7 +4,9 @@ set -eu
 [ "$(id -u)" -eq 0 ] || exec doas "$0" "$@"
 
 CONF="${1:-/etc/maped.conf}"
-. "$CONF"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+CONFIG_TEXT=$("$SCRIPT_DIR/maped-config" "$CONF")
+eval "$CONFIG_TEXT"
 
 route delete -inet default >/dev/null 2>&1 || true
 pfctl -a mape -F rules >/dev/null 2>&1 || true

@@ -4,11 +4,12 @@ set -eu
 [ "$(id -u)" -eq 0 ] || exec doas "$0" "$@"
 
 CONF="${1:-/etc/maped.conf}"
-. "$CONF"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+CONFIG_TEXT=$("$SCRIPT_DIR/maped-config" "$CONF")
+eval "$CONFIG_TEXT"
 MAPED_SNAPSHOT="${2:-}"
 export MAPED_SNAPSHOT
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DERIVE_COMMAND="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
 [ -x "$DERIVE_COMMAND" ] || DERIVE_COMMAND="$SCRIPT_DIR/maped-derive"
 MAPED_PEER_IPV4="${MAPED_PEER_IPV4:-${MAPE_PEER_IPV4:-0.0.0.1}}"

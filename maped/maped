@@ -19,7 +19,7 @@ use warnings;
 use Getopt::Std;
 use FindBin;
 use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
-use Maped qw(command status_text parse_lease complete_lease lease_text);
+use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text);
 use File::Temp qw(tempfile);
 use File::Path qw(make_path);
 use POSIX qw(setsid strftime);
@@ -36,6 +36,9 @@ my $force_poll = $opt{p} ? 1 : 0;
 my $interval = defined $opt{i} ? $opt{i} : 30;
 my $log_level = lc($opt{l} // "");
 my $conf = $ARGV[0] || "/etc/maped.conf";
+usage() if @ARGV > 1;
+require Cwd;
+$conf = Cwd::abs_path($conf) // die "maped: configuration not found\n";
 
 usage() if $daemon && $foreground;
 usage() if $interval !~ /^\d+$/ || $interval < 1;
@@ -87,7 +90,7 @@ sub startup_message {
 	my $backend = $have_kqueue && $conf{LEASE_FILE} ?
 	    "kqueue on $conf{LEASE_FILE}; health check every ${interval}s" :
 	    "polling every ${interval}s";
-	return "started; watching $conf with $backend";
+	return "started; using $conf (restart to reload); $backend";
 }
 
 sub daemonize {
@@ -105,24 +108,9 @@ sub daemonize {
 
 sub read_conf {
 	my ($path) = @_;
-	my %c;
-
-	open my $fh, "<", $path or die "maped: cannot read $path: $!\n";
-	while (my $line = <$fh>) {
-		chomp $line;
-		$line =~ s/^\s+//;
-		$line =~ s/\s+$//;
-		next if $line eq "" || $line =~ /^#/;
-		next unless $line =~ /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
-		my ($key, $value) = ($1, $2);
-		$value =~ s/\s+#.*$//;
-		if ($value =~ /^"(.*)"$/ || $value =~ /^'(.*)'$/) {
-			$value = $1;
-		}
-		$c{$key} = $value;
-	}
-
-	return %c;
+	open my $fh, '<', $path or die "maped: cannot read $path: $!";
+	local $/;
+	return parse_config(<$fh>);
 }
 
 sub resolve_command {
@@ -218,7 +206,11 @@ sub run_once {
 	my %lease = map { split /=/, $_, 2 } split /\n/, $snapshot;
 	print {$fh} lease_text(\%lease) or die "maped: snapshot write: $!";
 	close $fh or die "maped: snapshot close: $!";
-	my ($rc, $out) = run_command($maped_up, $conf, $path);
+	my ($cfh, $cpath) = tempfile("config.XXXXXXXX", DIR => $state_dir);
+	print {$cfh} config_text(\%conf) or die "maped: config write: $!";
+	close $cfh or die "maped: config close: $!";
+	my ($rc, $out) = run_command($maped_up, $cpath, $path);
+	unlink $cpath;
 	unlink $path;
 	if ($rc == 0) {
 		write_state($snapshot);

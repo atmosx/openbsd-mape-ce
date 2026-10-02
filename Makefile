@@ -15,7 +15,7 @@ MANMODE?=444
 
 SCRIPT=maped
 METRICS=mape-prometheus-metrics
-HELPERS=maped-derive maped-up maped-down
+HELPERS=maped-derive maped-up maped-down maped-config
 CONF=maped.conf
 RCSCRIPT=maped
 MAN=maped.8

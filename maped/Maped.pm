@@ -7,7 +7,7 @@ use Exporter 'import';
 use IO::Select;
 use POSIX qw(WNOHANG setpgid);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
-our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text);
+our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text parse_config config_text);
 
 sub status_text {
 	my ($rc) = @_;
@@ -138,5 +138,40 @@ sub lease_text {
 	return "ia_pd 0 $addr $plen\nmape_br $l->{BR_IPV6}\nmape_rule " .
 	    join(' ', map { $l->{$_} // 0 } qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)) .
 	    "\nmape_portparams " . join(' ', @$l{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)}) . "\n";
+}
+
+# A deliberately small shell-compatible language: literal assignments only.
+# Do not execute configuration to discover values in a privileged daemon.
+sub parse_config {
+	my ($text) = @_;
+	my %config;
+	for my $line (split /\n/, $text) {
+		next if $line =~ /^\s*(?:#.*)?$/;
+		die "invalid configuration assignment: $line\n" unless
+		    $line =~ /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
+		my ($key, $rest) = ($1, $2);
+		my $value = '';
+		while (length $rest && $rest !~ /^\s/) {
+			if ($rest =~ s/^'([^']*)'// || $rest =~ s/^"([^"\\\$`]*)"// ||
+			    $rest =~ s/^([A-Za-z0-9_.\/:,{}@%+=-]+)//) {
+				$value .= $1;
+			} else {
+				die "unsupported quoting or expansion for $key\n";
+			}
+		}
+		die "trailing configuration text for $key\n" unless $rest =~ /^\s*(?:#.*)?$/;
+		die "control character in $key\n" if $value =~ /[\x00-\x1f\x7f]/;
+		$config{$key} = $value;
+	}
+	return %config;
+}
+
+sub config_text {
+	my ($config) = @_;
+	return join '', map {
+		my $value = $config->{$_};
+		$value =~ s/'/'"'"'/g;
+		"$_='$value'\n";
+	} sort keys %$config;
 }
 1;
