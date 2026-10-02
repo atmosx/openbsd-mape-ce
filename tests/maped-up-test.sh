@@ -55,6 +55,10 @@ run()
 		[ "$expected" != fail ] || { echo "unexpected success: $wan $setting"; exit 1; }
 		grep -qx "ifconfig gif0 mtu $expected" "$tmp/calls"
 		grep -qx "match out on gif0 inet proto tcp flags S/SA scrub (max-mss $((expected - 40)))" "$tmp/anchor"
+		if grep -Eq '^pass in .* on gif0 inet ' "$tmp/anchor"; then
+			echo 'generated anchor must not admit unsolicited tunnel IPv4 traffic' >&2
+			exit 1
+		fi
 	else
 		[ "$expected" = fail ] || { echo "unexpected failure: $wan $setting"; exit 1; }
 		[ ! -s "$tmp/calls" ]

@@ -180,8 +180,12 @@ match out on gif0 inet from 192.168.123.0/24 to any nat-to (gif0) round-robin ma
 pass out quick on pppoe0 inet6 proto ipencap from 2a02... to 2a02...
 pass in quick on pppoe0 inet6 proto ipencap from 2a02... to 2a02...
 pass out quick on gif0 inet from (gif0) to any flags S/SA
-pass in quick on gif0 inet from any to (gif0) flags S/SA
 ```
+
+The generated anchor does not permit unsolicited inbound IPv4 on `gif0`.
+PF state admits replies; configure intended inbound services explicitly in
+`pf.conf` (for example, a restricted VoIP peer and port range). Do not rely on
+the MAP-E provider's port filtering as the router's firewall policy.
 
 ## Tunnel MTU and TCP MSS
 

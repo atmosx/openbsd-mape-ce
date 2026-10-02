@@ -90,8 +90,9 @@ match out on $GIF_IF inet from $LAN_NET to any nat-to ($GIF_IF) map-e-portset $P
 pass out quick on $WAN_IF inet6 proto 4 from $CE_IPV6 to $BR_IPV6 keep state
 pass in  quick on $WAN_IF inet6 proto 4 from $BR_IPV6 to $CE_IPV6 keep state
 
+# Return traffic is admitted by PF state. The parent ruleset must explicitly
+# permit any unsolicited inbound services; never open all CE ports here.
 pass out quick on $GIF_IF inet from ($GIF_IF) to any keep state
-pass in  quick on $GIF_IF inet from any to ($GIF_IF) keep state
 EOF
 
 "$PFCTL" -a mape -nf "$PF_ANCHOR_TMP"
