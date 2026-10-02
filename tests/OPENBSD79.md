@@ -77,7 +77,7 @@ Current patch SHA256 values (updated when patches change):
 
 ```text
 b6ac038048b253e6c31de18170d1acea7040168f76ef442f0dc3d34ff5fecc12  patch/pf-map-e-ce/mape79.patch
-67383e95e0639fdbdcf3c2d82f25c21b45cf8c6e11c1b6907703a0b566995a3d  patch/dhcp6leased-mape-softwire46-openbsd79.patch
+3e2dacf4c8803c05326590d2b238fdcd13589f9387064ee4474cc6285e15bca4  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
 The full arm64 GENERIC.MP kernel build completed successfully (exit status 0).
@@ -132,6 +132,11 @@ Follow-up DHCP parser tests also cover unchanged and changed-prefix malformed
 renewals, changed servers, expiry, restart confirmation, and multiple BR
 options. The daemon builds and all DHCP regressions pass on OpenBSD 7.9 arm64.
 The original deployment gate above remains outstanding for the revised tree.
+Well-formed unknown MAP-E container/rule TLVs are now skipped rather than
+withdrawing an otherwise valid response; truncated TLVs remain rejected. The
+updated 7.9 patch applies to the pristine source subset on vm02 and its
+S46 fuzz regression passes, including `MALLOC_OPTIONS=S`. This does not
+constitute a live DHCP exchange or a patched-kernel packet-path test.
 
 ### DHCP validation and initial tunnel MTU
 

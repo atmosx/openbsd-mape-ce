@@ -116,18 +116,18 @@ parse_s46_mape_options(uint8_t *p, size_t len, struct s46_mape *mape)
 			break;
 		default:
 			/*
-			 * RFC 7598 does not require strict rejection
-			 * of unknown S46 sub-options, but the MAP-E
-			 * container is a small, well-defined TLV set.
-			 * Treat anything unrecognised as a malformed 
-			 * container so the engine falls back to
-			 * the previously learned MAP-E state instead
-			 * of silently building partial state from
-			 * data we cannot validate.
+			 * RFC 7598 permits unknown sub-options in
+			 * extensible MAP-E containers. The TLV length
+			 * has already been checked against the remaining
+			 * buffer, so skip it without interpreting it.
+			 * Reject malformed known BR/rule options above;
+			 * do not let optional future extensions make a
+			 * valid provisioning response unusable.
+			 * Keep the BR and rule requirements below.
 			 */
-			log_warnx("%s: unexpected S46 MAP-E sub-option: "
+			log_debug("%s: ignoring unknown MAP-E sub-option: "
 			    "%u", __func__, opt_hdr.code);
-			return (-1);
+			break;
 		}
 
 		p += opt_hdr.len;
@@ -243,9 +243,9 @@ parse_s46_rule_options(uint8_t *p, size_t len, struct s46_rule *rule)
 			rule->portparams.valid = 1;
 			break;
 		default:
-			log_warnx("%s: unexpected S46 rule sub-option: "
+			log_debug("%s: ignoring unknown S46 rule sub-option: "
 			    "%u", __func__, opt_hdr.code);
-			return (-1);
+			break;
 		}
 
 		p += opt_hdr.len;

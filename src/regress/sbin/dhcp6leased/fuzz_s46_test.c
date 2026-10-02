@@ -230,6 +230,36 @@ main(void)
 	if (mprotect(fuzz_guard, fuzz_pagesz, PROT_NONE) == -1)
 		err(1, "mprotect");
 
+	/* A well-formed future TLV must not invalidate a usable rule. */
+	{
+		static const uint8_t extra[] = {
+		    0x12, 0x34, 0x00, 0x02, 0xaa, 0xbb
+		};
+		uint8_t extended[sizeof(valid_mape) + sizeof(extra)];
+		struct s46_mape baseline, parsed;
+
+		if (parse_s46_mape_options((uint8_t *)valid_mape,
+		    sizeof(valid_mape), &baseline) != 0)
+			errx(1, "valid MAP-E seed rejected");
+		memcpy(extended, valid_mape, sizeof(valid_mape));
+		memcpy(extended + sizeof(valid_mape), extra, sizeof(extra));
+		if (parse_s46_mape_options(extended, sizeof(extended),
+		    &parsed) != 0 || parsed.rule_count != baseline.rule_count ||
+		    !parsed.rules[0].portparams.valid)
+			errx(1, "unknown MAP-E container TLV rejected");
+		/* Increase the rule length to place the TLV inside the rule. */
+		extended[23] += sizeof(extra);
+		if (parse_s46_mape_options(extended, sizeof(extended),
+		    &parsed) != 0 || parsed.rule_count != baseline.rule_count ||
+		    !parsed.rules[0].portparams.valid)
+			errx(1, "unknown MAP-E rule TLV rejected");
+		/* Even an unknown TLV must still be fully bounded. */
+		extended[sizeof(valid_mape) + 2] = 0xff;
+		if (parse_s46_mape_options(extended, sizeof(extended),
+		    &parsed) == 0)
+			errx(1, "truncated unknown MAP-E TLV accepted");
+	}
+
 	check_seed(valid_mape, sizeof(valid_mape));
 	check_seed(cosmote_mape, sizeof(cosmote_mape));
 	check_seed(multi_mape, sizeof(multi_mape));

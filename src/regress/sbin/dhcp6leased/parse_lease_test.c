@@ -433,10 +433,15 @@ check_raw_s46_mape(void)
 	check_reject_s46(duplicate_br, sizeof(duplicate_br), "BRs without rule");
 	check_reject_s46(duplicate_portparams, sizeof(duplicate_portparams),
 	    "duplicate portparams");
-	check_reject_s46(unknown_subopt, sizeof(unknown_subopt),
-	    "unknown MAP-E container sub-option");
-	check_reject_s46(unknown_rule_subopt, sizeof(unknown_rule_subopt),
-	    "unknown S46_RULE sub-option");
+	if (parse_s46_mape_options((uint8_t *)unknown_subopt,
+	    sizeof(unknown_subopt), &mape) != 0 || !mape.valid ||
+	    mape.rule_count != 1 || !mape.rules[0].portparams.valid ||
+	    mape.rules[0].portparams.psid != 42)
+		errx(1, "unknown MAP-E container sub-option invalidated rule");
+	if (parse_s46_mape_options((uint8_t *)unknown_rule_subopt,
+	    sizeof(unknown_rule_subopt), &mape) != 0 || !mape.valid ||
+	    mape.rule_count != 1 || mape.rules[0].portparams.valid)
+		errx(1, "unknown S46_RULE sub-option invalidated rule");
 }
 
 static void
