@@ -80,6 +80,18 @@ die "maped: insecure state directory\n" if $state_stat[4] != 0 || ($state_stat[2
 open my $lock, '>>', "$state_dir/lock" or die "maped: lock: $!";
 flock($lock, LOCK_EX | LOCK_NB) or die "maped: another instance owns $state_dir\n";
 
+# A missing Perl sandbox must fail synchronously, before -d reports success.
+if ($^O eq 'openbsd') {
+	my $loaded = eval {
+		require OpenBSD::Pledge;
+		OpenBSD::Pledge->import(qw(pledge));
+		require OpenBSD::Unveil;
+		OpenBSD::Unveil->import(qw(unveil));
+		1;
+	};
+	die "maped: pledge/unveil unavailable on OpenBSD: $@\n" unless $loaded;
+}
+
 if ($daemon) {
 	daemonize();
 	openlog("maped", "pid", LOG_DAEMON);
@@ -153,11 +165,9 @@ sub sandbox_parent {
 	};
 	if (!$loaded) {
 		chomp(my $err = $@ || "unknown error");
-		if ($^O eq "openbsd") {
-			log_warn("pledge/unveil unavailable; running without sandbox: $err");
-		} else {
-			log_debug("pledge/unveil unavailable; running without sandbox");
-		}
+		die "maped: pledge/unveil unavailable on OpenBSD: $err\n"
+		    if $^O eq "openbsd";
+		log_debug("pledge/unveil unavailable; running without sandbox on non-OpenBSD");
 		return;
 	}
 

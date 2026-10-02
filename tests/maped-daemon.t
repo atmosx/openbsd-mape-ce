@@ -107,4 +107,15 @@ sleep 3.5;
 like(readfile("$tmp/calls"), qr/up\ndown\n/, 'read failure cannot extend confirmed expiry');
 kill 'TERM', $pid;
 waitpid($pid, 0);
+
+SKIP: {
+	skip 'OpenBSD-only sandbox failure test', 2 unless $^O eq 'openbsd';
+	mkdir "$tmp/deny" or die $!;
+	mkdir "$tmp/deny/OpenBSD" or die $!;
+	writefile("$tmp/deny/OpenBSD/Pledge.pm", "die qq(intentional module failure\\n);\n");
+	local $ENV{PERL5LIB} = "$tmp/deny";
+	($rc, $out) = once();
+	isnt($rc, 0, 'missing pledge module stops OpenBSD daemon');
+	like($out, qr/pledge\/unveil unavailable on OpenBSD/, 'sandbox failure is explicit');
+}
 done_testing;

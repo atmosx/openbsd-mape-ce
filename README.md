@@ -249,7 +249,9 @@ the GIF interface and `mape` PF anchor
 for maped. Legacy `lease.state` files alone are not ownership records: obtain
 a successful live configuration after upgrade before relying on auto-cleanup.
 The state directory is root-owned and must not be group/world writable; a lock
-prevents concurrent instances using the same directory.
+prevents concurrent instances using the same directory. On OpenBSD, install the
+`OpenBSD::Pledge` and `OpenBSD::Unveil` Perl modules before starting maped:
+missing sandbox support is fatal rather than silently running unsandboxed.
 
 The daemon and all helpers accept literal shell-style configuration values.
 Quotes and comments are supported; expansions and shell commands are rejected.
