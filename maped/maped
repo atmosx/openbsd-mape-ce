@@ -17,6 +17,9 @@
 use strict;
 use warnings;
 use Getopt::Std;
+use FindBin;
+use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
+use Maped qw(command status_text);
 use File::Path qw(make_path);
 use POSIX qw(setsid strftime);
 use Sys::Syslog qw(:standard :macros);
@@ -66,8 +69,8 @@ if ($daemon) {
 
 sandbox_parent();
 
+exit(run_once() ? 0 : 1) if $once;
 run_once();
-exit 0 if $once;
 
 while (1) {
 	wait_for_change();
@@ -189,18 +192,18 @@ sub run_once {
 	my $snapshot = lease_snapshot();
 	if (!complete_snapshot($snapshot)) {
 		log_warn("lease data incomplete; waiting");
-		return;
+		return 0;
 	}
 
 	my $old = read_state();
 	my $runtime_reason = runtime_reconfigure_reason();
 	if (defined $runtime_reason && $runtime_reason =~ /^cannot run /) {
 		log_warn("MAP-E runtime health check failed: $runtime_reason");
-		return;
+		return 0;
 	}
 	if (defined $old && $old eq $snapshot && !defined $runtime_reason) {
 		log_debug("lease data unchanged and MAP-E runtime looks healthy");
-		return;
+		return 1;
 	}
 
 	if (!defined $old || $old ne $snapshot) {
@@ -214,12 +217,13 @@ sub run_once {
 		write_state($snapshot);
 		log_info("MAP-E reconfiguration complete");
 		log_debug("maped-up output:\n$out") if $out ne "";
-		return;
+		return 1;
 	}
 
-	my $exit = $rc == -1 ? "exec failed" : "exit " . ($rc >> 8);
+	my $exit = status_text($rc);
 	log_warn("MAP-E reconfiguration failed: $exit");
 	log_warn("maped-up output:\n$out") if $out ne "";
+	return 0;
 }
 
 sub runtime_reconfigure_reason {
@@ -371,32 +375,12 @@ sub read_file {
 }
 
 sub read_cmd {
-	my (@cmd) = @_;
-	open my $fh, "-|", @cmd or return "";
-	local $/;
-	my $out = <$fh>;
-	close $fh;
-	return $out // "";
+	my ($rc, $out) = run_command(@_);
+	return $rc == 0 ? $out : "";
 }
 
 sub run_command {
-	my (@cmd) = @_;
-	my $pid = open my $fh, "-|";
-	if (!defined $pid) {
-		return (-1, "cannot fork: $!");
-	}
-	if ($pid == 0) {
-		open STDERR, ">&", STDOUT or exit 127;
-		exec @cmd or do {
-			print "cannot exec $cmd[0]: $!\n";
-			exit 127;
-		};
-	}
-
-	local $/;
-	my $out = <$fh> // "";
-	close $fh;
-	return ($?, $out);
+	return command(30, 1024 * 1024, @_);
 }
 
 sub read_state {

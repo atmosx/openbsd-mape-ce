@@ -45,7 +45,7 @@ and are not intended as the primary user interface.
 The options are as follows:
 .Bl -tag -width Ds
 .It Fl 1
-Run once and exit.
+Run once and exit nonzero if provisioning or configuration fails.
 .It Fl d
 Run as a daemon.
 .It Fl f
@@ -71,6 +71,9 @@ is not specified,
 .Nm
 reads
 .Pa /etc/maped.conf .
+.Pp
+External commands are limited to 30 seconds and 1 MiB of captured output.
+Timed-out helper process groups are terminated.
 .Sh CONFIGURATION
 The configuration file is a
 .Xr sh 1

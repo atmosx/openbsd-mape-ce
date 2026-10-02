@@ -26,11 +26,13 @@ all:
 	@echo "Run 'make install' as root to install MAP-E CE maped."
 
 test:
+	perl tests/maped.t
 	sh tests/maped-up-test.sh
 	sh tests/run.sh
 	$(MAKE) metrics-test
 
 pf-test:
+	perl tests/maped.t
 	sh tests/pf-nat-test.sh "$(OPENBSD_SRC)"
 	sh tests/pf-mape-validate-test.sh "$(OPENBSD_SRC)"
 
@@ -46,6 +48,8 @@ install-bin:
 	for helper in $(HELPERS); do \
 		install -o $(OWNER) -g $(GROUP) -m $(BINMODE) maped/$$helper $(DESTDIR)$(LIBEXECDIR)/$$helper; \
 	done
+
+	install -o $(OWNER) -g $(GROUP) -m 444 maped/Maped.pm $(DESTDIR)$(LIBEXECDIR)/Maped.pm
 
 install-conf:
 	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(SYSCONFDIR)
@@ -69,6 +73,7 @@ metrics-install:
 	install -o $(OWNER) -g $(GROUP) -m $(BINMODE) metrics/$(METRICS) $(DESTDIR)$(BINDIR)/$(METRICS)
 
 uninstall:
+	rm -f $(DESTDIR)$(LIBEXECDIR)/Maped.pm
 	rm -f $(DESTDIR)$(BINDIR)/$(SCRIPT)
 	rm -f $(DESTDIR)$(BINDIR)/$(METRICS)
 	for helper in $(HELPERS); do \
