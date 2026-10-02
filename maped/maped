@@ -311,7 +311,9 @@ sub run_once {
 		unlink $path;
 		return 1;
 	}
-	log_info('applying current MAP-E provisioning');
+	my $apply_reason = $runtime_reason // (!%previous ? 'no recorded ownership' :
+	    !defined $old ? 'no saved desired state' : 'desired configuration changed');
+	log_info("applying current MAP-E provisioning: $apply_reason");
 	# Record ownership before mutations, so partial failures can be retired.
 	atomic_write($applied_file, config_text(\%plan));
 	my $budget = $lease_deadline - clock_gettime(CLOCK_MONOTONIC);

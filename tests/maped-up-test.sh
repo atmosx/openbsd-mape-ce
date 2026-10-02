@@ -19,6 +19,10 @@ if [ "$#" -eq 1 ]; then
 	exit 0
 fi
 printf 'ifconfig %s\n' "$*" >> "$CALLS"
+# OpenBSD removes interface routes when the GIF is destroyed.
+if [ "$1 $2" = 'gif0 destroy' ] && [ -n "${ROUTE_STATE:-}" ]; then
+	rm -f "$ROUTE_STATE"
+fi
 EOF
 cat > "$tmp/bin/pfctl" <<'EOF'
 #!/bin/sh
@@ -28,10 +32,22 @@ cat > "$tmp/bin/route" <<'EOF'
 #!/bin/sh
 if [ "$1" = -n ] && [ "$2" = get ]; then
 	[ -n "${ROUTE_TEST_IF:-}" ] || exit 1
+	[ -z "${ROUTE_STATE:-}" ] || [ -f "$ROUTE_STATE" ] || exit 1
 	printf '    gateway: %s\n  interface: %s\n' "$ROUTE_TEST_GW" "$ROUTE_TEST_IF"
 	exit 0
 fi
 printf 'route %s\n' "$*" >> "$CALLS"
+if [ -n "${ROUTE_STATE:-}" ]; then
+	case "$1" in
+	delete)
+		[ "${ROUTE_DELETE_FAIL:-0}" = 0 ] || exit 1
+		[ -f "$ROUTE_STATE" ] || { echo 'default: not in table' >&2; exit 1; }
+		rm "$ROUTE_STATE" ;;
+	add)
+		[ ! -f "$ROUTE_STATE" ] || exit 1
+		touch "$ROUTE_STATE" ;;
+	esac
+fi
 EOF
 cat > "$tmp/bin/derive" <<'EOF'
 #!/bin/sh
@@ -98,9 +114,28 @@ fi
 [ ! -s "$tmp/calls" ]
 n=$((n + 1)); echo "ok $n - preserve an unrelated default route"
 : > "$tmp/calls"
+touch "$tmp/route-state"
 env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
     WAN_TEST_MTU=1492 ROUTE_TEST_IF=gif0 ROUTE_TEST_GW=0.0.0.1 \
+    ROUTE_STATE="$tmp/route-state" \
     sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
 grep -qx 'route delete -inet default -ifp gif0 0.0.0.1' "$tmp/calls"
-n=$((n + 1)); echo "ok $n - replace only owned default route"
+grep -qx 'route add -inet default -ifp gif0 0.0.0.1' "$tmp/calls"
+[ -f "$tmp/route-state" ]
+awk '/^route delete / { deleted = 1 }
+    /^ifconfig gif0 destroy$/ { if (!deleted) exit 1; destroyed = 1 }
+    END { if (!destroyed) exit 1 }' "$tmp/calls"
+n=$((n + 1)); echo "ok $n - delete owned route before interface destruction and restore it"
+: > "$tmp/calls"
+if env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
+    WAN_TEST_MTU=1492 ROUTE_TEST_IF=gif0 ROUTE_TEST_GW=0.0.0.1 \
+    ROUTE_STATE="$tmp/route-state" ROUTE_DELETE_FAIL=1 \
+    sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1; then
+	echo 'ignored owned route deletion failure' >&2; exit 1
+fi
+[ -f "$tmp/route-state" ]
+if grep -Eq '^ifconfig gif0 destroy$|^route add ' "$tmp/calls"; then
+	echo 'continued rebuilding after route deletion failure' >&2; exit 1
+fi
+n=$((n + 1)); echo "ok $n - do not ignore route deletion errors"
 printf '1..%s\n' "$n"

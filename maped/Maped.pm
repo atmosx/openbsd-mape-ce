@@ -215,7 +215,11 @@ sub same_ipv6 {
 
 sub has_ipv6 {
 	my ($text, $address) = @_;
-	while ($text =~ /\binet6\s+([0-9a-fA-F:]+)(?:%\S+)?\s+prefixlen\s+\d+\b/g) {
+	# Point-to-point interfaces print "-->" and an optional peer before
+	# prefixlen. Match only the local address, without crossing line breaks.
+	while ($text =~ /\binet6[ \t]+([0-9a-fA-F:]+)(?:%\S+)?[ \t]+
+	    (?:-->[ \t]+(?:[0-9a-fA-F:]+(?:%\S+)?[ \t]+)?)?
+	    prefixlen[ \t]+\d+\b/gx) {
 		return 1 if same_ipv6($1, $address);
 	}
 	return 0;

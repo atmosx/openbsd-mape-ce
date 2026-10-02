@@ -124,6 +124,18 @@ my $rules = "match out on gif0 inet from any to any nat-to (gif0) map-e-portset 
 my $route = " interface: gif0\n gateway: 0.0.0.1\n";
 ok(has_ipv6($wan, $plan{CE_IPV6}), 'equivalent IPv6 spellings match');
 is(runtime_mismatch(\%plan, $gif, $wan, $rules, $route), undef, 'matching runtime');
+for my $peer ('', '2001:db8::2', 'fe80::2%pppoe0') {
+	my $ptp = " inet6 2001:0db8:0:0:0:0:0:1 --> $peer prefixlen 128\n";
+	ok(has_ipv6($ptp, $plan{CE_IPV6}), "point-to-point alias detected (peer='$peer')");
+	is(runtime_mismatch(\%plan, $gif, $ptp, $rules, $route), undef,
+	    "healthy point-to-point WAN needs no repair (peer='$peer')");
+}
+ok(has_ipv6(' inet6 fe80::1%pppoe0 -->  prefixlen 64', 'fe80::1'),
+    'scoped point-to-point local address detected');
+ok(!has_ipv6(' inet6 2001:db8::2 --> 2001:db8::1 prefixlen 128', $plan{CE_IPV6}),
+    'point-to-point peer does not count as local alias');
+ok(!has_ipv6(" inet6 2001:db8::1 -->\n prefixlen 128", $plan{CE_IPV6}),
+    'alias parser does not span lines');
 for my $case (
     [0, '1452', '1400', qr/MTU/],
     [0, 'UP,', '', qr/not UP/],

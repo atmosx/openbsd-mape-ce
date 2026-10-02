@@ -79,6 +79,11 @@ if ! "$IFCONFIG" "$WAN_IF" | grep -q "$CE_IPV6"; then
 	"$IFCONFIG" "$WAN_IF" inet6 alias "$CE_IPV6" prefixlen 128
 fi
 
+# Delete the verified owned route while its interface still exists.
+# Destroying the GIF removes its routes on OpenBSD, invalidating DEFAULT.
+if [ -n "$DEFAULT" ]; then
+	"$ROUTE" delete -inet default -ifp "$GIF_IF" "$MAPED_PEER_IPV4"
+fi
 if "$IFCONFIG" "$GIF_IF" >/dev/null 2>&1; then
 	"$IFCONFIG" "$GIF_IF" destroy
 fi
@@ -112,9 +117,6 @@ EOF
 mv "$PF_ANCHOR_TMP" "$PF_ANCHOR_FILE"
 trap - EXIT
 
-if [ -n "$DEFAULT" ]; then
-	"$ROUTE" delete -inet default -ifp "$GIF_IF" "$MAPED_PEER_IPV4"
-fi
 "$ROUTE" add -inet default -ifp "$GIF_IF" "$MAPED_PEER_IPV4"
 
 echo "MAP-E is up"
