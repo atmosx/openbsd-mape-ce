@@ -1356,7 +1356,7 @@
  	size_t			 rem;
  	uint32_t		 t1, t2, lease_time;
  	int			 serverid_len, rapid_commit = 0;
-+	int			 mape_invalid = 0;
++	int			 mape_invalid = 0, clientid_seen = 0, ia_error = 0;
  	uint8_t			 serverid[SERVERID_SIZE];
  	uint8_t			*p;
  	char			 ifnamebuf[IF_NAMESIZE], *if_name;
@@ -1368,7 +1368,58 @@
  
  	p = dhcp->packet;
  	rem = dhcp->len;
-@@ -855,6 +867,21 @@
+@@ -763,6 +775,15 @@
+ 		goto out;
+ 	}
+ 	memcpy(&hdr, p, sizeof(struct dhcp_hdr));
++	if (hdr.msg_type != DHCPADVERTISE && hdr.msg_type != DHCPREPLY) {
++		log_debug("%s: ignoring message type %u", __func__,
++		    hdr.msg_type);
++		goto out;
++	}
++	if (memcmp(hdr.xid, iface->xid, sizeof(hdr.xid)) != 0) {
++		log_debug("%s: transaction ID mismatch", __func__);
++		goto out;
++	}
+ 	p += sizeof(struct dhcp_hdr);
+ 	rem -= sizeof(struct dhcp_hdr);
+ 
+@@ -788,6 +809,7 @@
+ 
+ 		switch (opt_hdr.code) {
+ 		case DHO_CLIENTID:
++			clientid_seen = 1;
+ 			if (opt_hdr.len != sizeof(struct dhcp_duid) ||
+ 			    memcmp(&duid, p, sizeof(struct dhcp_duid)) != 0) {
+ 				log_debug("%s: message not for us", __func__);
+@@ -825,6 +847,13 @@
+ 			}
+ 			memcpy(&iapd, p, sizeof(struct dhcp_iapd));
+ 
++			/* RFC 9915, 21.21: ignore an IA_PD with invalid timers. */
++			if (ntohl(iapd.t1) != 0 && ntohl(iapd.t2) != 0 &&
++			    ntohl(iapd.t1) > ntohl(iapd.t2)) {
++				log_warnx("%s: T1 > T2, ignoring IA_PD", __func__);
++				break;
++			}
++
+ 			if (t1 == 0 || t1 > ntohl(iapd.t1))
+ 				t1 = ntohl(iapd.t1);
+ 			if (t2 == 0 || t2 > ntohl(iapd.t2))
+@@ -841,10 +870,8 @@
+ 				    &iface->new_pds[ntohl(iapd.iaid)]);
+ 
+ 				if (status_code != DHCP_STATUS_SUCCESS &&
+-				    iface->state == IF_RENEWING) {
+-					state_transition(iface, IF_REBINDING);
+-					goto out;
+-				}
++				    iface->state == IF_RENEWING)
++					ia_error = 1;
+ 			}
+ 			break;
+ 		case DHO_RAPID_COMMIT:
+@@ -855,6 +882,21 @@
  			}
  			rapid_commit = 1;
  			break;
@@ -1390,7 +1441,31 @@
  		default:
  			log_debug("unhandled option: %u", opt_hdr.code);
  			break;
-@@ -892,6 +919,21 @@
+@@ -862,11 +904,23 @@
+ 
+ 		p += opt_hdr.len;
+ 		rem -= opt_hdr.len;
++	}
++
++	/* RFC 9915, 16.3 and 16.10: our exchanges require a client ID. */
++	if (!clientid_seen) {
++		log_warnx("%s: missing client identifier", __func__);
++		goto out;
+ 	}
+ 
+ 	/* check that we got all the information we need */
+ 	if (serverid_len == 0) {
+ 		log_warnx("%s: Did not receive server identifier", __func__);
++		goto out;
++	}
++
++	/* Do not change state on an error before validating the identifiers. */
++	if (ia_error) {
++		state_transition(iface, IF_REBINDING);
+ 		goto out;
+ 	}
+ 
+@@ -892,6 +946,21 @@
  		log_debug("%s: pltime: %u, vltime: %u, prefix: %s/%u",
  		    __func__, pd->pltime, pd->vltime, inet_ntop(AF_INET6,
  		    &pd->prefix, ntopbuf, INET6_ADDRSTRLEN), pd->prefix_len);
@@ -1412,7 +1487,7 @@
  	}
  
  	switch (hdr.msg_type) {
-@@ -920,6 +962,7 @@
+@@ -920,6 +989,7 @@
  		iface->serverid_len = serverid_len;
  		memcpy(iface->serverid, serverid, SERVERID_SIZE);
  		memcpy(iface->pds, iface->new_pds, sizeof(iface->pds));
@@ -1420,7 +1495,7 @@
  		state_transition(iface, IF_REQUESTING);
  		break;
  	case DHCPREPLY:
-@@ -950,6 +993,7 @@
+@@ -950,6 +1020,7 @@
  		else
  			iface->t2 = t2;
  		iface->lease_time = lease_time;
@@ -1428,7 +1503,18 @@
  		clock_gettime(CLOCK_MONOTONIC, &iface->request_time);
  		state_transition(iface, IF_BOUND);
  		break;
-@@ -1295,6 +1339,7 @@
+@@ -958,8 +1029,8 @@
+ 		    __func__, dhcp_message_type2str(hdr.msg_type));
+ 		goto out;
+ 	default:
+-		fatalx("%s: %s unhandled",
+-		    __func__, dhcp_message_type2str(hdr.msg_type));
++		log_debug("%s: ignoring unknown message type %u",
++		    __func__, hdr.msg_type);
+ 		break;
+ 	}
+  out:
+@@ -1295,6 +1366,7 @@
  		imsg.serverid_len = iface->serverid_len;
  		memcpy(imsg.serverid, iface->serverid, SERVERID_SIZE);
  		memcpy(imsg.pds, iface->pds, sizeof(iface->pds));
@@ -1436,7 +1522,7 @@
  		break;
  	}
  	switch (iface->state) {
-@@ -1322,7 +1367,6 @@
+@@ -1322,7 +1394,6 @@
  	struct iface_conf	*iface_conf;
  	struct iface_ia_conf	*ia_conf;
  	struct iface_pd_conf	*pd_conf;
@@ -1444,7 +1530,7 @@
  	uint32_t	 	 i;
  	char		 	 ntopbuf[INET6_ADDRSTRLEN];
  	char			 ifnamebuf[IF_NAMESIZE], *if_name;
-@@ -1376,11 +1420,22 @@
+@@ -1376,11 +1447,22 @@
  	}
  
  	memcpy(iface->pds, iface->new_pds, sizeof(iface->pds));
@@ -1467,7 +1553,7 @@
  	engine_imsg_compose_main(IMSG_WRITE_LEASE, 0, &imsg_lease_info,
  	    sizeof(imsg_lease_info));
  }
-@@ -1427,6 +1482,8 @@
+@@ -1427,6 +1509,8 @@
  		}
  	}
  	memset(iface->pds, 0, sizeof(iface->pds));
@@ -1476,7 +1562,7 @@
  }
  
  void
-@@ -1632,6 +1689,22 @@
+@@ -1632,6 +1716,22 @@
  		return "DHO_SOL_MAX_RT";
  	case DHO_INF_MAX_RT:
  		return "DHO_INF_MAX_RT";
@@ -2124,7 +2210,7 @@
  .Ar socket
 --- /dev/null
 +++ b/regress/sbin/dhcp6leased/engine_test.c
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,274 @@
 +/*	$OpenBSD$ */
 +
 +/* Exercise the engine's packet parser without sockets or state timers. */
@@ -2233,16 +2319,16 @@
 +main(void)
 +{
 +	struct dhcp6leased_iface iface;
-+	struct imsg_dhcp packet;
++	struct imsg_dhcp packet, valid_packet;
 +	struct iface_ia_conf ia_conf;
 +	struct dhcp_option_hdr opt;
 +	struct dhcp_iapd iapd;
 +	struct dhcp_iaprefix prefix;
-+	size_t len;
++	size_t len, clientid_offset, iapd_offset;
 +	int scenario;
 +	/* REPLY, server ID, then MAP-E with one BR and a /42 rule. */
 +	static const uint8_t reply[] = {
-+	    7, 0, 0, 0, 0, 2, 0, 3, 0, 1, 1,
++	    7, 1, 2, 3, 0, 2, 0, 3, 0, 1, 1,
 +	    0, 94, 0, 38,
 +	    0, 90, 0, 16,
 +	    0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0,
@@ -2264,9 +2350,17 @@
 +		iface.if_index = if_nametoindex("lo0");
 +		assert(iface.if_index != 0);
 +		iface.state = IF_REQUESTING;
++		memcpy(iface.xid, reply + 1, sizeof(iface.xid));
 +		iface_conf.request_mape = enabled;
 +		memcpy(packet.packet, reply, sizeof(reply));
 +		len = sizeof(reply);
++		clientid_offset = len;
++		opt.code = htons(DHO_CLIENTID);
++		opt.len = htons(sizeof(duid));
++		memcpy(packet.packet + len, &opt, sizeof(opt));
++		len += sizeof(opt);
++		memcpy(packet.packet + len, &duid, sizeof(duid));
++		len += sizeof(duid);
 +		memset(&iapd, 0, sizeof(iapd));
 +		memset(&prefix, 0, sizeof(prefix));
 +		prefix.prefix_len = 56;
@@ -2278,6 +2372,7 @@
 +		opt.len = htons(sizeof(iapd) + sizeof(opt) + sizeof(prefix));
 +		memcpy(packet.packet + len, &opt, sizeof(opt));
 +		len += sizeof(opt);
++		iapd_offset = len;
 +		memcpy(packet.packet + len, &iapd, sizeof(iapd));
 +		len += sizeof(iapd);
 +		opt.code = htons(DHO_IA_PREFIX);
@@ -2317,6 +2412,76 @@
 +		parse_dhcp(&iface, &packet);
 +		assert(iface.state == IF_BOUND);
 +		assert(iface.mape.valid == (scenario == 0));
++	}
++	/* Validate both Advertise and Reply before accepting configuration. */
++	packet.packet[18] = 16;
++	valid_packet = packet;
++	for (enabled = 0; enabled < 2; enabled++) {
++		for (scenario = 0; scenario < 10; scenario++) {
++			packet = valid_packet;
++			memset(&iface, 0, sizeof(iface));
++			iface.if_index = if_nametoindex("lo0");
++			iface.state = enabled ? IF_REQUESTING : IF_INIT;
++			memcpy(iface.xid, reply + 1, sizeof(iface.xid));
++			packet.packet[0] = enabled ? DHCPREPLY : DHCPADVERTISE;
++			switch (scenario) {
++			case 0: /* Valid message. */
++				break;
++			case 1:
++				packet.packet[1] ^= 1;
++				break;
++			case 2: /* Replace client ID with an unknown option. */
++				packet.packet[clientid_offset] = 0xff;
++				break;
++			case 3:
++				packet.packet[clientid_offset + sizeof(opt)] ^= 1;
++				break;
++			case 4:
++				packet.packet[0] = 255;
++				break;
++			default:
++				memset(&iapd, 0, sizeof(iapd));
++				iapd.t1 = htonl(scenario == 6 ? 0 : 200);
++				iapd.t2 = htonl(scenario == 7 ? 0 :
++				    scenario == 8 ? 200 : 100);
++				memcpy(packet.packet + iapd_offset, &iapd,
++				    sizeof(iapd));
++				break;
++			}
++			/* An invalid IA_PD must not discard the rest of the reply. */
++			if (scenario == 9) {
++				len = iapd_offset - sizeof(opt);
++				memcpy(packet.packet + packet.len,
++				    valid_packet.packet + len, valid_packet.len - len);
++				packet.len += valid_packet.len - len;
++			}
++			parse_dhcp(&iface, &packet);
++			if (scenario == 0 || scenario >= 6) {
++				assert(iface.state ==
++				    (enabled ? IF_BOUND : IF_REQUESTING));
++				assert(iface.mape.valid);
++			} else {
++				assert(iface.state ==
++				    (enabled ? IF_REQUESTING : IF_INIT));
++				assert(!iface.mape.valid);
++			}
++		}
++	}
++	/* A renewal error cannot bypass required client-ID validation. */
++	for (scenario = 0; scenario < 2; scenario++) {
++		packet = valid_packet;
++		iface.state = IF_RENEWING;
++		packet.packet[clientid_offset] = 0xff;
++		len = iapd_offset + sizeof(iapd);
++		opt.code = htons(DHO_STATUS_CODE);
++		opt.len = htons(sizeof(prefix));
++		memcpy(packet.packet + len, &opt, sizeof(opt));
++		packet.packet[len + sizeof(opt)] = 0;
++		packet.packet[len + sizeof(opt) + 1] = DHCP_STATUS_UNSPECFAIL;
++		if (scenario == 1)
++			packet.packet[clientid_offset] = 0;
++		parse_dhcp(&iface, &packet);
++		assert(iface.state == (scenario ? IF_REBINDING : IF_RENEWING));
 +	}
 +	return (0);
 +}

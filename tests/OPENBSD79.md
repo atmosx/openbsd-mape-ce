@@ -77,7 +77,7 @@ Current patch SHA256 values (updated when patches change):
 
 ```text
 b6ac038048b253e6c31de18170d1acea7040168f76ef442f0dc3d34ff5fecc12  patch/pf-map-e-ce/mape79.patch
-a9b4e9d8f291864ae7445bc24d06c6f9d5bbdc62343c27a1522a598e2089ace6  patch/dhcp6leased-mape-softwire46-openbsd79.patch
+c57e8f01cd41621604721e36ee94ce1ca6b9ff367809b3ab96f86c46eb3c0ba7  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
 The full arm64 GENERIC.MP kernel build completed successfully (exit status 0).
@@ -132,3 +132,11 @@ Follow-up DHCP parser tests also cover unchanged and changed-prefix malformed
 renewals, changed servers, expiry, restart confirmation, and multiple BR
 options. The daemon builds and all DHCP regressions pass on OpenBSD 7.9 arm64.
 The original deployment gate above remains outstanding for the revised tree.
+
+### DHCP message validation
+
+The engine regressions check RFC 9915 §§16, 16.3, 16.10, and 21.21:
+matching transaction/client IDs, required client ID, unknown message types,
+and IA_PD timer ordering (including zero/equal timers and ignoring an invalid
+IA_PD while accepting another usable one).
+

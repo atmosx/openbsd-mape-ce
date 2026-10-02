@@ -106,16 +106,16 @@ int
 main(void)
 {
 	struct dhcp6leased_iface iface;
-	struct imsg_dhcp packet;
+	struct imsg_dhcp packet, valid_packet;
 	struct iface_ia_conf ia_conf;
 	struct dhcp_option_hdr opt;
 	struct dhcp_iapd iapd;
 	struct dhcp_iaprefix prefix;
-	size_t len;
+	size_t len, clientid_offset, iapd_offset;
 	int scenario;
 	/* REPLY, server ID, then MAP-E with one BR and a /42 rule. */
 	static const uint8_t reply[] = {
-	    7, 0, 0, 0, 0, 2, 0, 3, 0, 1, 1,
+	    7, 1, 2, 3, 0, 2, 0, 3, 0, 1, 1,
 	    0, 94, 0, 38,
 	    0, 90, 0, 16,
 	    0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0,
@@ -137,9 +137,17 @@ main(void)
 		iface.if_index = if_nametoindex("lo0");
 		assert(iface.if_index != 0);
 		iface.state = IF_REQUESTING;
+		memcpy(iface.xid, reply + 1, sizeof(iface.xid));
 		iface_conf.request_mape = enabled;
 		memcpy(packet.packet, reply, sizeof(reply));
 		len = sizeof(reply);
+		clientid_offset = len;
+		opt.code = htons(DHO_CLIENTID);
+		opt.len = htons(sizeof(duid));
+		memcpy(packet.packet + len, &opt, sizeof(opt));
+		len += sizeof(opt);
+		memcpy(packet.packet + len, &duid, sizeof(duid));
+		len += sizeof(duid);
 		memset(&iapd, 0, sizeof(iapd));
 		memset(&prefix, 0, sizeof(prefix));
 		prefix.prefix_len = 56;
@@ -151,6 +159,7 @@ main(void)
 		opt.len = htons(sizeof(iapd) + sizeof(opt) + sizeof(prefix));
 		memcpy(packet.packet + len, &opt, sizeof(opt));
 		len += sizeof(opt);
+		iapd_offset = len;
 		memcpy(packet.packet + len, &iapd, sizeof(iapd));
 		len += sizeof(iapd);
 		opt.code = htons(DHO_IA_PREFIX);
@@ -190,6 +199,76 @@ main(void)
 		parse_dhcp(&iface, &packet);
 		assert(iface.state == IF_BOUND);
 		assert(iface.mape.valid == (scenario == 0));
+	}
+	/* Validate both Advertise and Reply before accepting configuration. */
+	packet.packet[18] = 16;
+	valid_packet = packet;
+	for (enabled = 0; enabled < 2; enabled++) {
+		for (scenario = 0; scenario < 10; scenario++) {
+			packet = valid_packet;
+			memset(&iface, 0, sizeof(iface));
+			iface.if_index = if_nametoindex("lo0");
+			iface.state = enabled ? IF_REQUESTING : IF_INIT;
+			memcpy(iface.xid, reply + 1, sizeof(iface.xid));
+			packet.packet[0] = enabled ? DHCPREPLY : DHCPADVERTISE;
+			switch (scenario) {
+			case 0: /* Valid message. */
+				break;
+			case 1:
+				packet.packet[1] ^= 1;
+				break;
+			case 2: /* Replace client ID with an unknown option. */
+				packet.packet[clientid_offset] = 0xff;
+				break;
+			case 3:
+				packet.packet[clientid_offset + sizeof(opt)] ^= 1;
+				break;
+			case 4:
+				packet.packet[0] = 255;
+				break;
+			default:
+				memset(&iapd, 0, sizeof(iapd));
+				iapd.t1 = htonl(scenario == 6 ? 0 : 200);
+				iapd.t2 = htonl(scenario == 7 ? 0 :
+				    scenario == 8 ? 200 : 100);
+				memcpy(packet.packet + iapd_offset, &iapd,
+				    sizeof(iapd));
+				break;
+			}
+			/* An invalid IA_PD must not discard the rest of the reply. */
+			if (scenario == 9) {
+				len = iapd_offset - sizeof(opt);
+				memcpy(packet.packet + packet.len,
+				    valid_packet.packet + len, valid_packet.len - len);
+				packet.len += valid_packet.len - len;
+			}
+			parse_dhcp(&iface, &packet);
+			if (scenario == 0 || scenario >= 6) {
+				assert(iface.state ==
+				    (enabled ? IF_BOUND : IF_REQUESTING));
+				assert(iface.mape.valid);
+			} else {
+				assert(iface.state ==
+				    (enabled ? IF_REQUESTING : IF_INIT));
+				assert(!iface.mape.valid);
+			}
+		}
+	}
+	/* A renewal error cannot bypass required client-ID validation. */
+	for (scenario = 0; scenario < 2; scenario++) {
+		packet = valid_packet;
+		iface.state = IF_RENEWING;
+		packet.packet[clientid_offset] = 0xff;
+		len = iapd_offset + sizeof(iapd);
+		opt.code = htons(DHO_STATUS_CODE);
+		opt.len = htons(sizeof(prefix));
+		memcpy(packet.packet + len, &opt, sizeof(opt));
+		packet.packet[len + sizeof(opt)] = 0;
+		packet.packet[len + sizeof(opt) + 1] = DHCP_STATUS_UNSPECFAIL;
+		if (scenario == 1)
+			packet.packet[clientid_offset] = 0;
+		parse_dhcp(&iface, &packet);
+		assert(iface.state == (scenario ? IF_REBINDING : IF_RENEWING));
 	}
 	return (0);
 }

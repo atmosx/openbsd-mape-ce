@@ -742,7 +742,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 	size_t			 rem;
 	uint32_t		 t1, t2, lease_time;
 	int			 serverid_len, rapid_commit = 0;
-	int			 mape_invalid = 0;
+	int			 mape_invalid = 0, clientid_seen = 0, ia_error = 0;
 	uint8_t			 serverid[SERVERID_SIZE];
 	uint8_t			*p;
 	char			 ifnamebuf[IF_NAMESIZE], *if_name;
@@ -775,6 +775,15 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 		goto out;
 	}
 	memcpy(&hdr, p, sizeof(struct dhcp_hdr));
+	if (hdr.msg_type != DHCPADVERTISE && hdr.msg_type != DHCPREPLY) {
+		log_debug("%s: ignoring message type %u", __func__,
+		    hdr.msg_type);
+		goto out;
+	}
+	if (memcmp(hdr.xid, iface->xid, sizeof(hdr.xid)) != 0) {
+		log_debug("%s: transaction ID mismatch", __func__);
+		goto out;
+	}
 	p += sizeof(struct dhcp_hdr);
 	rem -= sizeof(struct dhcp_hdr);
 
@@ -800,6 +809,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 
 		switch (opt_hdr.code) {
 		case DHO_CLIENTID:
+			clientid_seen = 1;
 			if (opt_hdr.len != sizeof(struct dhcp_duid) ||
 			    memcmp(&duid, p, sizeof(struct dhcp_duid)) != 0) {
 				log_debug("%s: message not for us", __func__);
@@ -837,6 +847,13 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 			}
 			memcpy(&iapd, p, sizeof(struct dhcp_iapd));
 
+			/* RFC 9915, 21.21: ignore an IA_PD with invalid timers. */
+			if (ntohl(iapd.t1) != 0 && ntohl(iapd.t2) != 0 &&
+			    ntohl(iapd.t1) > ntohl(iapd.t2)) {
+				log_warnx("%s: T1 > T2, ignoring IA_PD", __func__);
+				break;
+			}
+
 			if (t1 == 0 || t1 > ntohl(iapd.t1))
 				t1 = ntohl(iapd.t1);
 			if (t2 == 0 || t2 > ntohl(iapd.t2))
@@ -853,10 +870,8 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 				    &iface->new_pds[ntohl(iapd.iaid)]);
 
 				if (status_code != DHCP_STATUS_SUCCESS &&
-				    iface->state == IF_RENEWING) {
-					state_transition(iface, IF_REBINDING);
-					goto out;
-				}
+				    iface->state == IF_RENEWING)
+					ia_error = 1;
 			}
 			break;
 		case DHO_RAPID_COMMIT:
@@ -891,9 +906,21 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 		rem -= opt_hdr.len;
 	}
 
+	/* RFC 9915, 16.3 and 16.10: our exchanges require a client ID. */
+	if (!clientid_seen) {
+		log_warnx("%s: missing client identifier", __func__);
+		goto out;
+	}
+
 	/* check that we got all the information we need */
 	if (serverid_len == 0) {
 		log_warnx("%s: Did not receive server identifier", __func__);
+		goto out;
+	}
+
+	/* Do not change state on an error before validating the identifiers. */
+	if (ia_error) {
+		state_transition(iface, IF_REBINDING);
 		goto out;
 	}
 
@@ -1002,8 +1029,8 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 		    __func__, dhcp_message_type2str(hdr.msg_type));
 		goto out;
 	default:
-		fatalx("%s: %s unhandled",
-		    __func__, dhcp_message_type2str(hdr.msg_type));
+		log_debug("%s: ignoring unknown message type %u",
+		    __func__, hdr.msg_type);
 		break;
 	}
  out:
