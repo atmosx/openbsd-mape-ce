@@ -238,7 +238,11 @@ new process has no remaining in-memory proof of validity.
 `MAPED_STATE_DIR/applied.conf` records ownership before helper mutations.
 Withdrawal and failed applies run `maped-down` against that record. The helper
 preserves a default route on a different interface and a CE alias that existed
-before maped configured service. Reserve the GIF interface and `mape` PF anchor
+before maped configured service. Before applying changes, `maped-up` refuses to
+replace an IPv4 default route unless it already points to its GIF interface
+and configured peer. Remove or migrate another service's default route
+explicitly before enabling MAP-E; maped does not save and restore it. Reserve
+the GIF interface and `mape` PF anchor
 for maped. Legacy `lease.state` files alone are not ownership records: obtain
 a successful live configuration after upgrade before relying on auto-cleanup.
 The state directory is root-owned and must not be group/world writable; a lock

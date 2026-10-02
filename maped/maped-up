@@ -63,6 +63,18 @@ fi
 TCP_MSS=$((GIF_MTU - 40))
 echo "  GIF_MTU=$GIF_MTU TCP_MSS=$TCP_MSS"
 
+# Never replace a default route owned by another service. Check before any
+# mutations; when repairing our own route, require both interface and peer.
+DEFAULT=$("$ROUTE" -n get -inet default 2>/dev/null) || DEFAULT=""
+if [ -n "$DEFAULT" ]; then
+	DEFAULT_IF=$(printf '%s\n' "$DEFAULT" | awk '$1 == "interface:" { print $2; exit }')
+	DEFAULT_GW=$(printf '%s\n' "$DEFAULT" | awk '$1 == "gateway:" { print $2; exit }')
+	if [ "$DEFAULT_IF" != "$GIF_IF" ] || [ "$DEFAULT_GW" != "$MAPED_PEER_IPV4" ]; then
+		echo "refusing to replace an unowned IPv4 default route" >&2
+		exit 1
+	fi
+fi
+
 if ! "$IFCONFIG" "$WAN_IF" | grep -q "$CE_IPV6"; then
 	"$IFCONFIG" "$WAN_IF" inet6 alias "$CE_IPV6" prefixlen 128
 fi
@@ -100,7 +112,9 @@ EOF
 mv "$PF_ANCHOR_TMP" "$PF_ANCHOR_FILE"
 trap - EXIT
 
-"$ROUTE" delete -inet default >/dev/null 2>&1 || true
+if [ -n "$DEFAULT" ]; then
+	"$ROUTE" delete -inet default -ifp "$GIF_IF" "$MAPED_PEER_IPV4"
+fi
 "$ROUTE" add -inet default -ifp "$GIF_IF" "$MAPED_PEER_IPV4"
 
 echo "MAP-E is up"

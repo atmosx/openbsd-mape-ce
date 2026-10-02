@@ -27,6 +27,7 @@ EOF
 cat > "$tmp/bin/route" <<'EOF'
 #!/bin/sh
 if [ "$1" = -n ]; then
+	echo " gateway: $ROUTE_GW"
 	echo " interface: $ROUTE_IF"
 else
 	echo "route $*" >> "$CALLS"
@@ -36,7 +37,7 @@ chmod +x "$tmp/bin/"*
 n=0
 run()
 {
-	source=$1 route_if=$2 alias=$3
+	source=$1 route_if=$2 alias=$3 route_gw=${4:-0.0.0.1}
 	cat > "$tmp/conf" <<EOF
 WAN_IF=pppoe0
 GIF_IF=gif0
@@ -46,14 +47,15 @@ MAPED_ALIAS_OWNED=$alias
 EOF
 	: > "$tmp/calls"
 	env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
-	    TUNNEL_SOURCE="$source" ROUTE_IF="$route_if" \
+	    TUNNEL_SOURCE="$source" ROUTE_IF="$route_if" ROUTE_GW="$route_gw" \
 	    sh "$repo/maped/maped-down" "$tmp/conf" > /dev/null
 	if [ "$source" = 2001:db8::1 ]; then
 		grep -qx 'ifconfig gif0 destroy' "$tmp/calls"
 	else
 		! grep -q 'destroy' "$tmp/calls"
 	fi
-	if [ "$source" = 2001:db8::1 ] && [ "$route_if" = gif0 ]; then
+	if [ "$source" = 2001:db8::1 ] && [ "$route_if" = gif0 ] &&
+	    [ "$route_gw" = 0.0.0.1 ]; then
 		grep -q '^route delete' "$tmp/calls"
 	else
 		! grep -q '^route delete' "$tmp/calls"
@@ -70,4 +72,5 @@ run 2001:db8::1 gif0 1
 run 2001:db8::1 em0 1
 run 2001:db8::3 gif0 1
 run 2001:db8::1 gif0 0
+run 2001:db8::1 gif0 1 192.0.2.254
 printf '1..%s\n' "$n"

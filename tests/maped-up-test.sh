@@ -26,6 +26,11 @@ printf 'pfctl %s\n' "$*" >> "$CALLS"
 EOF
 cat > "$tmp/bin/route" <<'EOF'
 #!/bin/sh
+if [ "$1" = -n ] && [ "$2" = get ]; then
+	[ -n "${ROUTE_TEST_IF:-}" ] || exit 1
+	printf '    gateway: %s\n  interface: %s\n' "$ROUTE_TEST_GW" "$ROUTE_TEST_IF"
+	exit 0
+fi
 printf 'route %s\n' "$*" >> "$CALLS"
 EOF
 cat > "$tmp/bin/derive" <<'EOF'
@@ -82,4 +87,20 @@ run 1492 8193 fail
 run 1492 invalid fail
 run 1492 01452 fail
 run 1492 999999999999999999999 fail
+# An unrelated default route must be rejected before changing PF or interfaces.
+cp "$tmp/base.conf" "$tmp/conf"
+: > "$tmp/calls"
+if env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
+    WAN_TEST_MTU=1492 ROUTE_TEST_IF=em0 ROUTE_TEST_GW=192.0.2.254 \
+    sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1; then
+	echo 'accepted an unrelated default route' >&2; exit 1
+fi
+[ ! -s "$tmp/calls" ]
+n=$((n + 1)); echo "ok $n - preserve an unrelated default route"
+: > "$tmp/calls"
+env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
+    WAN_TEST_MTU=1492 ROUTE_TEST_IF=gif0 ROUTE_TEST_GW=0.0.0.1 \
+    sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
+grep -qx 'route delete -inet default -ifp gif0 0.0.0.1' "$tmp/calls"
+n=$((n + 1)); echo "ok $n - replace only owned default route"
 printf '1..%s\n' "$n"

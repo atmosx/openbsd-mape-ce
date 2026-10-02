@@ -16,7 +16,10 @@ ROUTE="${ROUTE:-route}"
 GIF_CONFIG=$("$IFCONFIG" "$GIF_IF" 2>/dev/null) || GIF_CONFIG=""
 if printf '%s\n' "$GIF_CONFIG" | grep -Fq "tunnel: inet6 $CE_IPV6 --> $BR_IPV6 "; then
 	DEFAULT=$("$ROUTE" -n get -inet default 2>/dev/null) || DEFAULT=""
-	if printf '%s\n' "$DEFAULT" | grep -Eq "^[[:space:]]*interface: $GIF_IF$"; then
+	DEFAULT_IF=$(printf '%s\n' "$DEFAULT" | awk '$1 == "interface:" { print $2; exit }')
+	DEFAULT_GW=$(printf '%s\n' "$DEFAULT" | awk '$1 == "gateway:" { print $2; exit }')
+	if [ "$DEFAULT_IF" = "$GIF_IF" ] &&
+	    [ "$DEFAULT_GW" = "${MAPED_PEER_IPV4:-0.0.0.1}" ]; then
 		"$ROUTE" delete -inet default -ifp "$GIF_IF" "${MAPED_PEER_IPV4:-0.0.0.1}"
 	fi
 	"$IFCONFIG" "$GIF_IF" destroy
