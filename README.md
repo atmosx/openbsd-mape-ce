@@ -217,8 +217,11 @@ relaying remains outside this change's scope.
 The daemon and derivation helper share a lease parser. Port parameters stay
 attached to their rule, and the BMR is selected by longest IPv6-prefix match
 (RFC 7597 §5 and RFC 7598 §4.1). Omitted port parameters default to offset 6
-and an EA-derived PSID. Equal-length ambiguous rules and multiple matching
-end-user prefixes are rejected rather than silently choosing the last one.
+and an EA-derived PSID. A PD must contain the IPv4 suffix bits; if it omits
+PSID bits, an explicit full-length PORTPARAMS PSID is required and used in
+both NAT and the CE IPv6 identifier. Conflicting known EA bits are rejected.
+Equal-length ambiguous rules and multiple matching end-user prefixes are
+rejected rather than silently choosing the last one.
 This remains a single-domain, hub-and-spoke implementation, not mesh support.
 
 `maped-up` receives a private snapshot from the daemon; derivation does not

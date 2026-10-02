@@ -160,16 +160,23 @@ my $ea_len      = value_for(\%lease, "EA_LEN", "EA_LEN");
 my $psid_offset = value_for(\%lease, "PSID_OFFSET", "PSID_OFFSET");
 my $br_ipv6     = $lease{BR_IPV6} // $ENV{BR_IPV6};
 
+my $v4_suffix_len = 32 - $map4_plen;
+my $psid_len = $ea_len - $v4_suffix_len;
+diex("invalid MAP rule: EA_LEN too small") if $psid_len < 0;
+# The PD must provide the IPv4 suffix. Some providers delegate only those EA
+# bits and supply the remaining PSID explicitly in PORTPARAMS (e.g. /56 PD,
+# /48 rule, 16 EA bits). The lower 64 bits hold the IPv4 address and PSID.
+diex("delegated prefix does not contain the MAP IPv4 suffix")
+    if $pd_plen < $map6_plen + $v4_suffix_len;
+diex("MAP EA bits overlap the CE interface identifier")
+    if $map6_plen + $ea_len > 64;
+
 my $pd_int = network_int(ipv6_to_int($pd_addr), $pd_plen, 128);
 my $rule6_int = network_int(ipv6_to_int($map6_prefix), $map6_plen, 128);
 
 if ($pd_int->copy()->band(mask_bits($map6_plen, 128))->bcmp($rule6_int) != 0) {
 	diex("delegated prefix $pd is not inside MAP rule $map6_prefix/$map6_plen");
 }
-
-my $v4_suffix_len = 32 - $map4_plen;
-my $psid_len = $ea_len - $v4_suffix_len;
-diex("invalid MAP rule: EA_LEN too small") if $psid_len < 0;
 
 my $shift = 128 - $map6_plen - $ea_len;
 my $ea = $pd_int->copy()->brsft($shift)->band(pow2($ea_len)->bsub(1));
@@ -181,6 +188,20 @@ my $nat_psid_len = (exists $lease{DHCP_PSID_LEN} && $lease{DHCP_PSID_LEN} > 0) ?
     $lease{DHCP_PSID_LEN} : $psid_len;
 my $nat_psid = (exists $lease{DHCP_PSID_LEN} && $lease{DHCP_PSID_LEN} > 0 &&
     exists $lease{DHCP_PSID}) ? $lease{DHCP_PSID} : $psid;
+
+if ($pd_plen < $map6_plen + $ea_len) {
+    diex("delegated prefix omits PSID bits without full PORTPARAMS")
+        if !$lease{DHCP_PSID_LEN} || $lease{DHCP_PSID_LEN} != $psid_len;
+    # PSID bits actually present in the PD must agree with PORTPARAMS.
+    my $known = $pd_plen - $map6_plen - $v4_suffix_len;
+    diex("PORTPARAMS PSID conflicts with delegated prefix")
+        if $known && ($nat_psid >> ($psid_len - $known)) !=
+            ($psid >> ($psid_len - $known));
+    $psid = $nat_psid;
+} elsif ($lease{DHCP_PSID_LEN} &&
+    ($lease{DHCP_PSID_LEN} != $psid_len || $nat_psid != $psid)) {
+    diex("PORTPARAMS PSID conflicts with MAP EA bits");
+}
 
 my $map4 = ipv4_to_int($map4_prefix) | $v4_suffix;
 my $map4_addr = int_to_ipv4($map4);

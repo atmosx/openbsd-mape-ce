@@ -2,6 +2,7 @@ use strict;
 use warnings;
 use Test::More;
 use FindBin;
+use File::Temp qw(tempfile);
 use lib "$FindBin::Bin/../maped";
 use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 my ($rc, $out) = command(2, 1024, $^X, '-e', 'print "ok"');
@@ -41,6 +42,39 @@ like($@, qr/without rule/, 'orphan parameters rejected');
 my %zero = parse_lease($base . $narrow . "mape_portparams 0 0 123\n");
 ok(complete_lease(\%zero), 'zero offset and length are complete');
 is($zero{DHCP_PSID}, 0, 'zero-length PSID field ignored');
+
+# Derivation must not invent EA bits missing from the delegated prefix.
+my ($snapshot, $snapshot_path) = tempfile();
+print {$snapshot} $base . "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 48\n";
+close $snapshot;
+{
+	local $ENV{MAPED_SNAPSHOT} = $snapshot_path;
+	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../maped/maped-derive");
+	isnt($rc, 0, 'reject PD shorter than rule prefix plus EA length');
+	like($out, qr/omits PSID bits/, 'underlength PD diagnostic');
+}
+open $snapshot, '>', $snapshot_path or die $!;
+print {$snapshot} $base . "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 48\n" .
+    "mape_portparams 6 8 42\n";
+close $snapshot;
+{
+	local $ENV{MAPED_SNAPSHOT} = $snapshot_path;
+	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../maped/maped-derive");
+	is($rc, 0, 'explicit PSID supplies missing EA bits');
+	like($out, qr/CE_IPV6='[^']*:2a'\n/, 'CE IID uses the provisioned PSID');
+}
+open $snapshot, '>', $snapshot_path or die $!;
+print {$snapshot} "ia_pd 0 2001:db8:100:: 52\nmape_br 2001:db8::1\n" .
+    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 48\n" .
+    "mape_portparams 6 8 42\n";
+close $snapshot;
+{
+	local $ENV{MAPED_SNAPSHOT} = $snapshot_path;
+	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../maped/maped-derive");
+	isnt($rc, 0, 'reject PD that omits IPv4 suffix even with explicit PSID');
+	like($out, qr/does not contain the MAP IPv4 suffix/, 'missing suffix diagnostic');
+}
+unlink $snapshot_path;
 
 my %cfg = parse_config("VALUE=\"hello # world\" # comment\nEMPTY=\nPATH='/some path'\n");
 is($cfg{VALUE}, 'hello # world', 'quoted comment preserved');
