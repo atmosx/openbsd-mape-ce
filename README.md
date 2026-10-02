@@ -1,6 +1,6 @@
 # OpenBSD MAP-E CE support
 
-This repository contains a collection of patches and scripts to add **Customer Edge Mapping of Address and Port with Encapsulation**, widely known as MAP-E CE ([RFC7597](https://datatracker.ietf.org/doc/html/rfc7597)), support to [OpenBSD](https://www.openbsd.org/) 7.8.
+This repository contains a collection of patches and scripts to add **Customer Edge Mapping of Address and Port with Encapsulation**, widely known as MAP-E CE ([RFC7597](https://datatracker.ietf.org/doc/html/rfc7597)), support to [OpenBSD](https://www.openbsd.org/) 7.9.
 
 ## Status
 
@@ -24,16 +24,29 @@ doas pkg_add git p5-IO-KQueue
 echo 'create\nup' > /etc/hostname.gif0
 ```
 
-Download and extract the source code:
+Use an OpenBSD 7.9 system and a clean `OPENBSD_7_9` (7.9-stable) CVS source tree. Do not mix release branches or apply these patches over an existing MAP-E patch. If `/usr/src` is already populated, preserve any local changes before updating it.
+
+To bootstrap an empty source tree, download and verify the source archives:
 
 ```ksh
 cd /tmp
-ftp https://cdn.openbsd.org/pub/OpenBSD/7.8/src.tar.gz
-ftp https://cdn.openbsd.org/pub/OpenBSD/7.8/sys.tar.gz
+ftp https://cdn.openbsd.org/pub/OpenBSD/7.9/src.tar.gz
+ftp https://cdn.openbsd.org/pub/OpenBSD/7.9/sys.tar.gz
+ftp https://cdn.openbsd.org/pub/OpenBSD/7.9/SHA256.sig
+signify -C -p /etc/signify/openbsd-79-base.pub -x SHA256.sig src.tar.gz sys.tar.gz
 cd /usr/src
 doas tar xzf /tmp/src.tar.gz
 doas tar xzf /tmp/sys.tar.gz
 ```
+
+Update the clean tree to 7.9-stable using your configured CVS mirror:
+
+```ksh
+cd /usr/src
+cvs -q -d anoncvs@anoncvs.ca.openbsd.org:/cvs update -rOPENBSD_7_9 -Pd
+```
+
+Follow the [OpenBSD stable build instructions](https://www.openbsd.org/stable.html) for source ownership and build-directory setup. Record the source revisions used for each build; stable is a moving branch.
 
 ## 2. Patch the system
 
@@ -44,16 +57,20 @@ doas mkdir /usr/local/src
 cd /usr/local/src
 doas git clone https://github.com/atmosx/openbsd-mape-ce
 cd /usr/src
-doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/pf-map-e-ce/mape78.patch
-doas patch -p0 < /usr/local/src/openbsd-mape-ce/patch/dhcp6leased-mape-softwire46-openbsd78.patch
+doas patch -p1 < /usr/local/src/openbsd-mape-ce/patch/pf-map-e-ce/mape79.patch
+doas patch -p1 < /usr/local/src/openbsd-mape-ce/patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
-> **NOTE**: Ignore the patches in the `split/` directory. These are an exact copy of `dhcp6leased-mape-softwire46-openbsd78.patch` split into scoped chunks.
+> **NOTE**: Ignore the patches in the `split/` directory. These are an exact copy of the original OpenBSD 7.8 patch split into scoped chunks. For 7.9, use only the two patch files above.
+
+The PF patch changes the kernel/userland PF ABI. A patched kernel must be paired with rebuilt PF consumers, not just `pfctl`: these include `ftp-proxy`, `tftp-proxy`, `relayd`, and `systat`. Rebuild base userland rather than assuming existing binaries remain compatible. Rebuild any third-party PF consumers separately.
+
+Perform installation during a maintenance window with console access. Do not rely on SSH surviving the transition: the old `pfctl` may fail to load the firewall on the first patched boot. Keep the router isolated from untrusted networks until the matching userland is installed and PF rules are verified. Back up the kernel, userland, and configuration together; a VM snapshot or full system backup is preferable to a kernel-only rollback. Binary kernel updates can replace the custom kernel and must not be applied without coordinating the patched build.
 
 Rebuild the kernel and reboot:
 
 ```ksh
-cd /usr/src/sys/arch/amd64/conf
+cd /usr/src/sys/arch/$(machine)/conf
 doas config GENERIC.MP
 cd ../compile/GENERIC.MP
 doas make clean
@@ -62,24 +79,15 @@ doas make install
 doas reboot
 ```
 
-Rebuild the userland tools:
+On the patched kernel, rebuild base userland using the standard build target. This installs the matching headers and rebuilds PF consumers:
 
 ```ksh
-cd /usr/src/sbin/pfctl
+cd /usr/src
 doas make obj
-doas make
-doas make install
-
-cd /usr/src/sbin/dhcp6leased
-doas make obj
-doas make
-doas make install
-
-cd /usr/src/usr.sbin/dhcp6leasectl
-doas make obj
-doas make
-doas make install
+doas make build
 ```
+
+Before reconnecting the router, verify `pfctl -nf /etc/pf.conf`, load the intended rules, and confirm PF is enabled and enforcing them. A kernel build alone is not a deployment acceptance test. See [the 7.9 validation checklist](tests/OPENBSD79.md).
 
 Enable the `mape` request in `/etc/dhcp6leased.conf`:
 

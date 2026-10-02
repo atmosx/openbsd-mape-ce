@@ -1,3 +1,4 @@
+OPENBSD_SRC?=/usr/src
 PREFIX?=/usr/local
 BINDIR?=$(PREFIX)/sbin
 LIBEXECDIR?=$(PREFIX)/libexec/maped
@@ -19,7 +20,7 @@ CONF=maped.conf
 RCSCRIPT=maped
 MAN=maped.8
 
-.PHONY: all test metrics-test install install-bin install-conf install-rc install-man metrics-install uninstall
+.PHONY: all test pf-test metrics-test install install-bin install-conf install-rc install-man metrics-install uninstall
 
 all:
 	@echo "Run 'make install' as root to install MAP-E CE maped."
@@ -27,6 +28,9 @@ all:
 test:
 	sh tests/run.sh
 	$(MAKE) metrics-test
+
+pf-test:
+	sh tests/pf-nat-test.sh "$(OPENBSD_SRC)"
 
 metrics-test:
 	sh tests/metrics-run.sh
