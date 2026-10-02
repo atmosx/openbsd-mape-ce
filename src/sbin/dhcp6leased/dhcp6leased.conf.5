@@ -76,6 +76,7 @@ When this is set,
 .Xr dhcp6leased 8
 asks the server for MAP-E parameters and persists any
 BR address, mapping rules, and port parameters it learns.
+If the server supplies multiple BR addresses, the first is used.
 If the option is unset (the default),
 .Xr dhcp6leased 8
 does not request MAP-E and ignores any MAP-E data the server sends.

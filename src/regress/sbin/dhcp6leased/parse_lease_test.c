@@ -387,6 +387,7 @@ check_raw_s46_mape(void)
 	    0x00, 0x42, 0x00, 0x02, 0xbe, 0xef,
 	};
 	struct s46_mape mape;
+	uint8_t multiple_br[sizeof(s46_mape) + 20];
 
 	memset(&mape, 0, sizeof(mape));
 	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
@@ -408,13 +409,28 @@ check_raw_s46_mape(void)
 	    mape.rules[0].portparams.psid != 42)
 		errx(1, "raw S46 MAP-E port parameters mismatch");
 
+	memcpy(multiple_br, s46_mape, sizeof(s46_mape));
+	memcpy(multiple_br + sizeof(s46_mape), duplicate_br + 20, 20);
+	if (parse_s46_mape_options(multiple_br, sizeof(multiple_br),
+	    &mape) != 0)
+		errx(1, "multiple BR addresses rejected");
+	check_in6("2001:db8:ffff::1", &mape.br);
+	multiple_br[sizeof(multiple_br) - 1] = 1;
+	if (parse_s46_mape_options(multiple_br, sizeof(multiple_br),
+	    &mape) != 0)
+		errx(1, "repeated BR address rejected");
+	check_in6("2001:db8:ffff::1", &mape.br);
+	multiple_br[sizeof(s46_mape) + 3] = 15;
+	check_reject_s46(multiple_br, sizeof(multiple_br),
+	    "malformed additional BR");
+
 	check_reject_s46(bad_br, sizeof(bad_br), "bad BR length");
 	check_reject_s46(bad_rule, sizeof(bad_rule), "bad rule length");
 	check_reject_s46(bad_portparams, sizeof(bad_portparams),
 	    "bad portparams length");
 	check_reject_s46(bad_portparams_span, sizeof(bad_portparams_span),
 	    "bad portparams span");
-	check_reject_s46(duplicate_br, sizeof(duplicate_br), "duplicate BR");
+	check_reject_s46(duplicate_br, sizeof(duplicate_br), "BRs without rule");
 	check_reject_s46(duplicate_portparams, sizeof(duplicate_portparams),
 	    "duplicate portparams");
 	check_reject_s46(unknown_subopt, sizeof(unknown_subopt),
@@ -440,6 +456,7 @@ check_raw_s46_mape_cosmote(void)
 	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x06,
 	};
 	struct s46_mape mape;
+	uint8_t multiple_br[sizeof(s46_mape) + 20];
 
 	memset(&mape, 0, sizeof(mape));
 	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
@@ -481,6 +498,7 @@ check_raw_s46_mape_multiple_rules(void)
 	    0x00, 0x5d, 0x00, 0x04, 0x04, 0x06, 0x44, 0x00,
 	};
 	struct s46_mape mape;
+	uint8_t multiple_br[sizeof(s46_mape) + 20];
 
 	memset(&mape, 0, sizeof(mape));
 	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),

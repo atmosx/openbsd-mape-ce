@@ -97,11 +97,9 @@ parse_s46_mape_options(uint8_t *p, size_t len, struct s46_mape *mape)
 				    __func__, opt_hdr.len);
 				return (-1);
 			}
-			if (nmape.br_valid) {
-				log_warnx("%s: duplicate S46 BR option",
-				    __func__);
-				return (-1);
-			}
+			/* RFC 7598 permits several BRs; use the first one. */
+			if (nmape.br_valid)
+				break;
 			memcpy(&nmape.br, p, sizeof(nmape.br));
 			nmape.br_valid = 1;
 			break;

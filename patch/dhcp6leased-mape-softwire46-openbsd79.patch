@@ -54,9 +54,9 @@
 +	env MALLOC_OPTIONS=S ./${.ALLSRC}
 +
 +.include <bsd.regress.mk>
---- a/regress/sbin/dhcp6leased/parse_lease_test.c
+--- /dev/null
 +++ b/regress/sbin/dhcp6leased/parse_lease_test.c
-@@ -0,0 +1,735 @@
+@@ -0,0 +1,753 @@
 +/*	$OpenBSD$ */
 +
 +#include <sys/types.h>
@@ -446,6 +446,7 @@
 +	    0x00, 0x42, 0x00, 0x02, 0xbe, 0xef,
 +	};
 +	struct s46_mape mape;
++	uint8_t multiple_br[sizeof(s46_mape) + 20];
 +
 +	memset(&mape, 0, sizeof(mape));
 +	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
@@ -467,13 +468,28 @@
 +	    mape.rules[0].portparams.psid != 42)
 +		errx(1, "raw S46 MAP-E port parameters mismatch");
 +
++	memcpy(multiple_br, s46_mape, sizeof(s46_mape));
++	memcpy(multiple_br + sizeof(s46_mape), duplicate_br + 20, 20);
++	if (parse_s46_mape_options(multiple_br, sizeof(multiple_br),
++	    &mape) != 0)
++		errx(1, "multiple BR addresses rejected");
++	check_in6("2001:db8:ffff::1", &mape.br);
++	multiple_br[sizeof(multiple_br) - 1] = 1;
++	if (parse_s46_mape_options(multiple_br, sizeof(multiple_br),
++	    &mape) != 0)
++		errx(1, "repeated BR address rejected");
++	check_in6("2001:db8:ffff::1", &mape.br);
++	multiple_br[sizeof(s46_mape) + 3] = 15;
++	check_reject_s46(multiple_br, sizeof(multiple_br),
++	    "malformed additional BR");
++
 +	check_reject_s46(bad_br, sizeof(bad_br), "bad BR length");
 +	check_reject_s46(bad_rule, sizeof(bad_rule), "bad rule length");
 +	check_reject_s46(bad_portparams, sizeof(bad_portparams),
 +	    "bad portparams length");
 +	check_reject_s46(bad_portparams_span, sizeof(bad_portparams_span),
 +	    "bad portparams span");
-+	check_reject_s46(duplicate_br, sizeof(duplicate_br), "duplicate BR");
++	check_reject_s46(duplicate_br, sizeof(duplicate_br), "BRs without rule");
 +	check_reject_s46(duplicate_portparams, sizeof(duplicate_portparams),
 +	    "duplicate portparams");
 +	check_reject_s46(unknown_subopt, sizeof(unknown_subopt),
@@ -499,6 +515,7 @@
 +	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x06,
 +	};
 +	struct s46_mape mape;
++	uint8_t multiple_br[sizeof(s46_mape) + 20];
 +
 +	memset(&mape, 0, sizeof(mape));
 +	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
@@ -540,6 +557,7 @@
 +	    0x00, 0x5d, 0x00, 0x04, 0x04, 0x06, 0x44, 0x00,
 +	};
 +	struct s46_mape mape;
++	uint8_t multiple_br[sizeof(s46_mape) + 20];
 +
 +	memset(&mape, 0, sizeof(mape));
 +	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
@@ -1743,7 +1761,7 @@
  print_config(struct dhcp6leased_conf *conf, int verbose)
 --- a/sbin/dhcp6leased/dhcp6leased.conf.5
 +++ b/sbin/dhcp6leased/dhcp6leased.conf.5
-@@ -67,6 +67,18 @@
+@@ -67,6 +67,19 @@
  .It Ic request rapid commit
  Send the rapid commit DHCPv6 option, requesting a two-message exchange
  from the server instead of the normal four-message exchange.
@@ -1756,15 +1774,16 @@
 +.Xr dhcp6leased 8
 +asks the server for MAP-E parameters and persists any
 +BR address, mapping rules, and port parameters it learns.
++If the server supplies multiple BR addresses, the first is used.
 +If the option is unset (the default),
 +.Xr dhcp6leased 8
 +does not request MAP-E and ignores any MAP-E data the server sends.
  .El
  .Ss Prefix delegation
  A list of interfaces on which to request prefix delegation:
---- a/sbin/dhcp6leased/s46.c
+--- /dev/null
 +++ b/sbin/dhcp6leased/s46.c
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,265 @@
 +/*	$OpenBSD$ */
 +
 +/*
@@ -1864,11 +1883,9 @@
 +				    __func__, opt_hdr.len);
 +				return (-1);
 +			}
-+			if (nmape.br_valid) {
-+				log_warnx("%s: duplicate S46 BR option",
-+				    __func__);
-+				return (-1);
-+			}
++			/* RFC 7598 permits several BRs; use the first one. */
++			if (nmape.br_valid)
++				break;
 +			memcpy(&nmape.br, p, sizeof(nmape.br));
 +			nmape.br_valid = 1;
 +			break;
