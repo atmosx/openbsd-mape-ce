@@ -67,8 +67,14 @@
 u_int64_t		 pf_hash(struct pf_addr *, struct pf_addr *,
 			    struct pf_poolhashkey *, sa_family_t);
 int			 pf_get_sport(struct pf_pdesc *, struct pf_rule *,
+			    struct pf_addr *, u_int16_t *,
+			    struct pf_src_node **);
+int			 pf_get_sport_range(struct pf_pdesc *, struct pf_rule *,
 			    struct pf_addr *, u_int16_t *, u_int16_t,
 			    u_int16_t, struct pf_src_node **);
+int			 pf_get_sport_mape(struct pf_pdesc *, struct pf_rule *,
+			    struct pf_addr *, u_int16_t *,
+			    struct pf_src_node **);
 int			 pf_map_addr_states_increase(sa_family_t,
 				struct pf_pool *, struct pf_addr *);
 int			 pf_get_transaddr_af(struct pf_rule *,
@@ -121,6 +127,32 @@ pf_hash(struct pf_addr *inaddr, struct pf_addr *hash,
 
 int
 pf_get_sport(struct pf_pdesc *pd, struct pf_rule *r,
+    struct pf_addr *naddr, u_int16_t *nport, struct pf_src_node **sn)
+{
+	u_int16_t low, high;
+
+	low = r->nat.proxy_port[0];
+	high = r->nat.proxy_port[1];
+
+
+	if (r->nat.mape.offset) {
+		if (pf_get_sport_mape(pd, r, naddr, nport, sn)) {
+			DPFPRINTF(LOG_NOTICE,
+			    "pf: MAP-E port allocation (%u/%u/%u) failed",
+			    r->nat.mape.offset, r->nat.mape.psidlen,
+			    r->nat.mape.psid);
+			return (-1);
+		}
+	} else if (pf_get_sport_range(pd, r, naddr, nport, low, high, sn)) {
+		DPFPRINTF(LOG_NOTICE,
+		    "pf: NAT proxy port allocation (%u-%u) failed", low, high);
+		return (-1);
+	}
+	return (0);
+}
+
+int
+pf_get_sport_range(struct pf_pdesc *pd, struct pf_rule *r,
     struct pf_addr *naddr, u_int16_t *nport, u_int16_t low, u_int16_t high,
     struct pf_src_node **sn)
 {
@@ -137,21 +169,23 @@ pf_get_sport(struct pf_pdesc *pd, struct pf_rule *r,
 		return (1);
 
 	if (pd->proto == IPPROTO_ICMP) {
-		if (pd->ndport == htons(ICMP_ECHO)) {
+		if (pd->ndport != htons(ICMP_ECHO))
+			return (0);
+		if (!r->nat.mape.offset) {
 			low = 1;
 			high = 65535;
-		} else
-			return (0);	/* Don't try to modify non-echo ICMP */
+		}
 	}
 #ifdef INET6
 	if (pd->proto == IPPROTO_ICMPV6) {
-		if (pd->ndport == htons(ICMP6_ECHO_REQUEST)) {
+		if (pd->ndport != htons(ICMP6_ECHO_REQUEST))
+			return (0);
+		if (!r->nat.mape.offset) {
 			low = 1;
 			high = 65535;
-		} else
-			return (0);	/* Don't try to modify non-echo ICMP */
+		}
 	}
-#endif /* INET6 */
+#endif
 
 	do {
 		key.af = pd->naf;
@@ -249,6 +283,40 @@ pf_get_sport(struct pf_pdesc *pd, struct pf_rule *r,
 	} while (! PF_AEQ(&init_addr, naddr, pd->naf) );
 	return (1);					/* none available */
 }
+
+int
+pf_get_sport_mape(struct pf_pdesc *pd, struct pf_rule *r,
+    struct pf_addr *naddr, u_int16_t *nport, struct pf_src_node **sn)
+{
+	u_int16_t	 psmask, low, high, highmask;
+	u_int16_t	 alow, ahigh, cut, tmp;
+	int		 ashift, psidshift;
+
+	ashift = 16 - r->nat.mape.offset;
+	psidshift = ashift - r->nat.mape.psidlen;
+	psmask = r->nat.mape.psid & ((1U << r->nat.mape.psidlen) - 1);
+	psmask = psmask << psidshift;
+	highmask = (1U << psidshift) - 1;
+
+	alow = 1;
+	ahigh = (1U << r->nat.mape.offset) - 1;
+	cut = arc4random_uniform(1 + ahigh - alow) + alow;
+
+	for (tmp = cut; tmp <= ahigh; ++tmp) {
+		low = (tmp << ashift) | psmask;
+		high = low | highmask;
+		if (!pf_get_sport_range(pd, r, naddr, nport, low, high, sn))
+			return (0);
+	}
+	for (tmp = cut - 1; tmp >= alow; --tmp) {
+		low = (tmp << ashift) | psmask;
+		high = low | highmask;
+		if (!pf_get_sport_range(pd, r, naddr, nport, low, high, sn))
+			return (0);
+	}
+	return (1);
+}
+
 
 int
 pf_map_addr_sticky(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
@@ -700,14 +768,8 @@ pf_get_transaddr(struct pf_rule *r, struct pf_pdesc *pd,
 		/* XXX is this right? what if rtable is changed at the same
 		 * XXX time? where do I need to figure out the sport? */
 		nport = 0;
-		if (pf_get_sport(pd, r, &naddr, &nport,
-		    r->nat.proxy_port[0], r->nat.proxy_port[1], sns)) {
-			DPFPRINTF(LOG_NOTICE,
-			    "pf: NAT proxy port allocation (%u-%u) failed",
-			    r->nat.proxy_port[0],
-			    r->nat.proxy_port[1]);
+		if (pf_get_sport(pd, r, &naddr, &nport, sns))
 			return (-1);
-		}
 		/* decrease least-connection state counter of the previous */
 		if ((*nr) != NULL && (*nr)->nat.addr.type != PF_ADDR_NONE &&
 		    ((*nr)->nat.opts & PF_POOL_TYPEMASK) ==
@@ -782,14 +844,8 @@ pf_get_transaddr_af(struct pf_rule *r, struct pf_pdesc *pd,
 
 	/* get source address and port */
 	nport = 0;
-	if (pf_get_sport(pd, r, &nsaddr, &nport,
-	    r->nat.proxy_port[0], r->nat.proxy_port[1], sns)) {
-		DPFPRINTF(LOG_NOTICE,
-		    "pf: af-to NAT proxy port allocation (%u-%u) failed",
-		    r->nat.proxy_port[0],
-		    r->nat.proxy_port[1]);
+	if (pf_get_sport(pd, r, &nsaddr, &nport, sns))
 		return (-1);
-	}
 	pd->nsport = nport;
 
 	if (pd->proto == IPPROTO_ICMPV6 && pd->naf == AF_INET) {

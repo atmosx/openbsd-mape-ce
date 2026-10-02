@@ -73,7 +73,7 @@ typedef struct {
 
 %}
 
-%token	ERROR IAPD
+%token	ERROR IAPD MAPEBR MAPEPORTPARAMS MAPERULE
 
 %token	<v.string>	STRING
 %token	<v.number>	NUMBER
@@ -83,6 +83,9 @@ typedef struct {
 grammar		: /* empty */
 		| grammar '\n'
 		| grammar ia_pd '\n'
+		| grammar mape_br '\n'
+		| grammar mape_rule '\n'
+		| grammar mape_portparams '\n'
 		| grammar error '\n'		{ file->errors++; }
 		;
 
@@ -108,6 +111,117 @@ ia_pd		: IAPD NUMBER STRING NUMBER {
 				YYERROR;
 			}
 			free($3);
+		}
+		;
+
+mape_br		: MAPEBR STRING {
+			if (ifinfo->mape.br_valid) {
+				yyerror("duplicate MAP-E BR address");
+				free($2);
+				YYERROR;
+			}
+			if (inet_pton(AF_INET6, $2, &ifinfo->mape.br) != 1) {
+				yyerror("invalid MAP-E BR address %s", $2);
+				free($2);
+				YYERROR;
+			}
+			ifinfo->mape.br_valid = 1;
+			if (ifinfo->mape.rule_count > 0)
+				ifinfo->mape.valid = 1;
+			free($2);
+		}
+		;
+
+mape_rule	: MAPERULE NUMBER NUMBER STRING NUMBER STRING NUMBER {
+			struct s46_rule	*rule;
+
+			if (ifinfo->mape.rule_count >=
+			    nitems(ifinfo->mape.rules)) {
+				yyerror("too many MAP-E rules");
+				goto err;
+			}
+			rule = &ifinfo->mape.rules[ifinfo->mape.rule_count];
+			if ($2 < 0 || $2 > 255) {
+				yyerror("invalid MAP-E flags %lld", $2);
+				goto err;
+			}
+			if ($3 < 0 || $3 > 48) {
+				yyerror("invalid MAP-E EA length %lld", $3);
+				goto err;
+			}
+			if ($5 < 0 || $5 > 32) {
+				yyerror("invalid MAP-E IPv4 prefix length %lld",
+				    $5);
+				goto err;
+			}
+			if ($7 < 0 || $7 > 128) {
+				yyerror("invalid MAP-E IPv6 prefix length %lld",
+				    $7);
+				goto err;
+			}
+			if (inet_pton(AF_INET, $4,
+			    &rule->prefix4) != 1) {
+				yyerror("invalid MAP-E IPv4 prefix %s", $4);
+				goto err;
+			}
+			if (inet_pton(AF_INET6, $6,
+			    &rule->prefix6) != 1) {
+				yyerror("invalid MAP-E IPv6 prefix %s", $6);
+				goto err;
+			}
+			rule->flags = $2;
+			rule->ea_len = $3;
+			rule->prefix4_len = $5;
+			rule->prefix6_len = $7;
+			rule->valid = 1;
+			ifinfo->mape.rule_count++;
+			if (ifinfo->mape.br_valid)
+				ifinfo->mape.valid = 1;
+			free($4);
+			free($6);
+			goto done;
+err:
+			free($4);
+			free($6);
+			YYERROR;
+done:
+			;
+		}
+		;
+
+mape_portparams : MAPEPORTPARAMS NUMBER NUMBER NUMBER {
+			struct s46_rule	*rule;
+
+			if (ifinfo->mape.rule_count == 0) {
+				yyerror("MAP-E port parameters without rule");
+				YYERROR;
+			}
+			rule = &ifinfo->mape.rules[ifinfo->mape.rule_count - 1];
+			if ($2 < 0 || $2 > 15) {
+				yyerror("invalid MAP-E PSID offset %lld", $2);
+				YYERROR;
+			}
+			if ($3 < 0 || $3 > 16) {
+				yyerror("invalid MAP-E PSID length %lld", $3);
+				YYERROR;
+			}
+			if ($2 + $3 > 16) {
+				yyerror("invalid MAP-E PSID offset/length %lld/%lld",
+				    $2, $3);
+				YYERROR;
+			}
+			if ($4 < 0 || $4 >= (1 << $3)) {
+				yyerror("invalid MAP-E PSID %lld", $4);
+				YYERROR;
+			}
+			if (rule->portparams.valid) {
+				yyerror("duplicate MAP-E port parameters");
+				YYERROR;
+			}
+			rule->portparams.offset = $2;
+			rule->portparams.psid_len = $3;
+			rule->portparams.psid = $4;
+			rule->portparams.valid = 1;
 		}
 		;
 %%
@@ -139,6 +253,9 @@ pllookup(char *s)
 	/* This has to be sorted always. */
 	static const struct keywords keywords[] = {
 		{"ia_pd",	IAPD},
+		{"mape_br",	MAPEBR},
+		{"mape_portparams",	MAPEPORTPARAMS},
+		{"mape_rule",	MAPERULE},
 	};
 	const struct keywords	*p;
 

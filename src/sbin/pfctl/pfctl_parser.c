@@ -514,6 +514,10 @@ print_pool(struct pf_pool *pool, u_int16_t p1, u_int16_t p2,
 		printf(" sticky-address");
 	if (id == PF_POOL_NAT && p1 == 0 && p2 == 0)
 		printf(" static-port");
+	if (pool->mape.offset) {
+		printf(" map-e-portset %u/%u/%u", pool->mape.offset,
+		    pool->mape.psidlen, pool->mape.psid);
+	}
 }
 
 const char	*pf_reasons[PFRES_MAX+1] = PFRES_NAMES;

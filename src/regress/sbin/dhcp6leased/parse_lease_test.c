@@ -1,0 +1,735 @@
+/*	$OpenBSD$ */
+
+#include <sys/types.h>
+#include <sys/queue.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+
+#include <net/if.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#include <err.h>
+#include <event.h>
+#include <imsg.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <unistd.h>
+
+#include "log.h"
+#include "dhcp6leased.h"
+
+TAILQ_HEAD(files, file) files = TAILQ_HEAD_INITIALIZER(files);
+struct file	*file, *topfile;
+
+struct keywords {
+	const char	*k_name;
+	int		 k_val;
+};
+
+static void	 write_lease(char *, size_t, const char *);
+static void	 check_valid_mape(void);
+static void	 check_valid_mape_multiple_rules(void);
+static void	 check_incomplete_mape_lease(void);
+static void	 check_invalid_portparams(void);
+static void	 check_duplicate_mape_lease(void);
+static void	 check_portparams_without_rule(void);
+static void	 check_raw_s46_mape(void);
+static void	 check_raw_s46_mape_cosmote(void);
+static void	 check_raw_s46_mape_multiple_rules(void);
+static void	 check_reject_too_many_rules(void);
+static void	 check_reject_s46(const uint8_t *, size_t, const char *);
+static void	 check_in6(const char *, const struct in6_addr *);
+static void	 check_in(const char *, const struct in_addr *);
+static int	 igetc(void);
+
+static void
+write_lease(char *path, size_t pathlen, const char *lease)
+{
+	int fd;
+
+	strlcpy(path, "/tmp/parse_lease_test.XXXXXXXXXX", pathlen);
+	if ((fd = mkstemp(path)) == -1)
+		err(1, "mkstemp");
+	if (dprintf(fd, "%s", lease) == -1)
+		err(1, "dprintf");
+	if (close(fd) == -1)
+		err(1, "close");
+}
+
+static void
+check_in6(const char *want, const struct in6_addr *got)
+{
+	struct in6_addr in6;
+
+	if (inet_pton(AF_INET6, want, &in6) != 1)
+		errx(1, "bad test IPv6 address %s", want);
+	if (memcmp(&in6, got, sizeof(in6)) != 0)
+		errx(1, "IPv6 address mismatch for %s", want);
+}
+
+static void
+check_in(const char *want, const struct in_addr *got)
+{
+	struct in_addr in;
+
+	if (inet_pton(AF_INET, want, &in) != 1)
+		errx(1, "bad test IPv4 address %s", want);
+	if (memcmp(&in, got, sizeof(in)) != 0)
+		errx(1, "IPv4 address mismatch for %s", want);
+}
+
+static void
+check_valid_mape(void)
+{
+	struct imsg_ifinfo ifinfo;
+	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "ia_pd 0 2001:db8:100:: 56\n"
+	    "mape_br 2001:db8:ffff::1\n"
+	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
+	    "mape_portparams 6 8 42\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (ifinfo.pds[0].prefix_len != 56)
+		errx(1, "IA_PD prefix length mismatch");
+	check_in6("2001:db8:100::", &ifinfo.pds[0].prefix);
+
+	if (!ifinfo.mape.valid)
+		errx(1, "MAP-E state not marked valid");
+	if (!ifinfo.mape.br_valid)
+		errx(1, "MAP-E BR not marked valid");
+	check_in6("2001:db8:ffff::1", &ifinfo.mape.br);
+
+	if (ifinfo.mape.rule_count != 1)
+		errx(1, "MAP-E rule count mismatch");
+	if (!ifinfo.mape.rules[0].valid)
+		errx(1, "MAP-E rule not marked valid");
+	if (ifinfo.mape.rules[0].flags != 0)
+		errx(1, "MAP-E rule flags mismatch");
+	if (ifinfo.mape.rules[0].ea_len != 16)
+		errx(1, "MAP-E EA length mismatch");
+	if (ifinfo.mape.rules[0].prefix4_len != 24)
+		errx(1, "MAP-E IPv4 prefix length mismatch");
+	if (ifinfo.mape.rules[0].prefix6_len != 56)
+		errx(1, "MAP-E IPv6 prefix length mismatch");
+	check_in("192.0.2.0", &ifinfo.mape.rules[0].prefix4);
+	check_in6("2001:db8:100::", &ifinfo.mape.rules[0].prefix6);
+
+	if (!ifinfo.mape.rules[0].portparams.valid)
+		errx(1, "MAP-E port parameters not marked valid");
+	if (ifinfo.mape.rules[0].portparams.offset != 6)
+		errx(1, "MAP-E PSID offset mismatch");
+	if (ifinfo.mape.rules[0].portparams.psid_len != 8)
+		errx(1, "MAP-E PSID length mismatch");
+	if (ifinfo.mape.rules[0].portparams.psid != 42)
+		errx(1, "MAP-E PSID mismatch");
+}
+
+static void
+check_incomplete_mape_lease(void)
+{
+	struct imsg_ifinfo ifinfo;
+	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "mape_br 2001:db8:ffff::1\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (!ifinfo.mape.br_valid)
+		errx(1, "MAP-E BR-only lease lost BR");
+	if (ifinfo.mape.rule_count != 0)
+		errx(1, "MAP-E BR-only lease grew rules");
+	if (ifinfo.mape.valid)
+		errx(1, "MAP-E BR-only lease marked valid");
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
+	    "mape_portparams 6 8 42\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (ifinfo.mape.br_valid)
+		errx(1, "MAP-E rule-only lease grew BR");
+	if (ifinfo.mape.rule_count != 1 || !ifinfo.mape.rules[0].valid)
+		errx(1, "MAP-E rule-only lease lost rule");
+	if (!ifinfo.mape.rules[0].portparams.valid)
+		errx(1, "MAP-E rule-only lease lost portparams");
+	if (ifinfo.mape.valid)
+		errx(1, "MAP-E rule-only lease marked valid");
+}
+
+static void
+check_invalid_portparams(void)
+{
+	struct imsg_ifinfo ifinfo;
+	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "mape_br 2001:db8:ffff::1\n"
+	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
+	    "mape_portparams 6 8 256\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (!ifinfo.mape.valid || ifinfo.mape.rule_count != 1 ||
+	    !ifinfo.mape.rules[0].valid)
+		errx(1, "valid MAP-E state lost after bad portparams");
+	if (ifinfo.mape.rules[0].portparams.valid)
+		errx(1, "invalid MAP-E port parameters accepted");
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "mape_br 2001:db8:ffff::1\n"
+	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
+	    "mape_portparams 15 2 0\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (!ifinfo.mape.valid || ifinfo.mape.rule_count != 1 ||
+	    !ifinfo.mape.rules[0].valid)
+		errx(1, "valid MAP-E state lost after bad portparams span");
+	if (ifinfo.mape.rules[0].portparams.valid)
+		errx(1, "invalid MAP-E port parameters span accepted");
+}
+
+static void
+check_valid_mape_multiple_rules(void)
+{
+	struct imsg_ifinfo ifinfo;
+	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "mape_br 2001:db8:ffff::1\n"
+	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
+	    "mape_portparams 6 8 42\n"
+	    "mape_rule 128 16 198.51.100.0 24 2001:db8:200:: 56\n"
+	    "mape_portparams 4 6 17\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (!ifinfo.mape.valid || !ifinfo.mape.br_valid)
+		errx(1, "multiple-rule lease MAP-E state incomplete");
+	if (ifinfo.mape.rule_count != 2)
+		errx(1, "multiple-rule lease rule count mismatch");
+	check_in6("2001:db8:ffff::1", &ifinfo.mape.br);
+
+	if (!ifinfo.mape.rules[0].valid || !ifinfo.mape.rules[1].valid)
+		errx(1, "multiple-rule lease rule not marked valid");
+	check_in("192.0.2.0", &ifinfo.mape.rules[0].prefix4);
+	check_in6("2001:db8:100::", &ifinfo.mape.rules[0].prefix6);
+	check_in("198.51.100.0", &ifinfo.mape.rules[1].prefix4);
+	check_in6("2001:db8:200::", &ifinfo.mape.rules[1].prefix6);
+
+	if (!ifinfo.mape.rules[0].portparams.valid ||
+	    ifinfo.mape.rules[0].portparams.offset != 6 ||
+	    ifinfo.mape.rules[0].portparams.psid_len != 8 ||
+	    ifinfo.mape.rules[0].portparams.psid != 42)
+		errx(1, "multiple-rule lease port parameters mismatch");
+	if (!ifinfo.mape.rules[1].portparams.valid ||
+	    ifinfo.mape.rules[1].portparams.offset != 4 ||
+	    ifinfo.mape.rules[1].portparams.psid_len != 6 ||
+	    ifinfo.mape.rules[1].portparams.psid != 17)
+		errx(1, "second multiple-rule lease port parameters mismatch");
+}
+
+static void
+check_portparams_without_rule(void)
+{
+	struct imsg_ifinfo ifinfo;
+	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "mape_br 2001:db8:ffff::1\n"
+	    "mape_portparams 6 8 42\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (ifinfo.mape.rule_count != 0)
+		errx(1, "accepted MAP-E port parameters without rule");
+	if (ifinfo.mape.valid && ifinfo.mape.rules[0].portparams.valid)
+		errx(1, "stored MAP-E port parameters without rule");
+}
+
+static void
+check_duplicate_mape_lease(void)
+{
+	struct imsg_ifinfo ifinfo;
+	char path[sizeof("/tmp/parse_lease_test.XXXXXXXXXX")];
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "mape_br 2001:db8:ffff::1\n"
+	    "mape_br 2001:db8:ffff::2\n"
+	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (!ifinfo.mape.br_valid)
+		errx(1, "MAP-E BR lost after duplicate BR");
+	check_in6("2001:db8:ffff::1", &ifinfo.mape.br);
+
+	memset(&ifinfo, 0, sizeof(ifinfo));
+	write_lease(path, sizeof(path),
+	    "mape_br 2001:db8:ffff::1\n"
+	    "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 56\n"
+	    "mape_portparams 6 8 42\n"
+	    "mape_portparams 4 6 17\n");
+
+	parse_lease(path, &ifinfo);
+	unlink(path);
+
+	if (!ifinfo.mape.rules[0].portparams.valid ||
+	    ifinfo.mape.rules[0].portparams.offset != 6 ||
+	    ifinfo.mape.rules[0].portparams.psid_len != 8 ||
+	    ifinfo.mape.rules[0].portparams.psid != 42)
+		errx(1, "duplicate MAP-E port parameters overwrote first set");
+}
+
+static void
+check_raw_s46_mape(void)
+{
+	static const uint8_t s46_mape[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x59, 0x00, 0x17,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
+	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
+	};
+	static const uint8_t bad_br[] = {
+	    0x00, 0x5a, 0x00, 0x0f,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	};
+	static const uint8_t bad_rule[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x59, 0x00, 0x07,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b,
+	};
+	static const uint8_t bad_portparams[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x59, 0x00, 0x16,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
+	    0x00, 0x5d, 0x00, 0x03, 0x06, 0x08, 0x2a,
+	};
+	static const uint8_t bad_portparams_span[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x59, 0x00, 0x17,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
+	    0x00, 0x5d, 0x00, 0x04, 0x0f, 0x02, 0x00, 0x00,
+	};
+	static const uint8_t duplicate_br[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+	};
+	static const uint8_t duplicate_portparams[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x59, 0x00, 0x1f,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
+	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
+	    0x00, 0x5d, 0x00, 0x04, 0x04, 0x06, 0x44, 0x00,
+	};
+	static const uint8_t unknown_subopt[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x59, 0x00, 0x17,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
+	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
+	    0x00, 0x42, 0x00, 0x02, 0xde, 0xad,
+	};
+	static const uint8_t unknown_rule_subopt[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x59, 0x00, 0x15,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
+	    0x00, 0x42, 0x00, 0x02, 0xbe, 0xef,
+	};
+	struct s46_mape mape;
+
+	memset(&mape, 0, sizeof(mape));
+	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
+	    &mape) != 0)
+		errx(1, "valid raw S46 MAP-E option rejected");
+	if (!mape.valid || !mape.br_valid || !mape.rules[0].valid)
+		errx(1, "valid raw S46 MAP-E state incomplete");
+	if (mape.rule_count != 1)
+		errx(1, "raw S46 MAP-E rule count mismatch");
+	check_in6("2001:db8:ffff::1", &mape.br);
+	check_in("192.0.2.0", &mape.rules[0].prefix4);
+	check_in6("2001:db8:100::", &mape.rules[0].prefix6);
+	if (mape.rules[0].flags != 0 || mape.rules[0].ea_len != 16 ||
+	    mape.rules[0].prefix4_len != 24 || mape.rules[0].prefix6_len != 56)
+		errx(1, "raw S46 MAP-E rule fields mismatch");
+	if (!mape.rules[0].portparams.valid ||
+	    mape.rules[0].portparams.offset != 6 ||
+	    mape.rules[0].portparams.psid_len != 8 ||
+	    mape.rules[0].portparams.psid != 42)
+		errx(1, "raw S46 MAP-E port parameters mismatch");
+
+	check_reject_s46(bad_br, sizeof(bad_br), "bad BR length");
+	check_reject_s46(bad_rule, sizeof(bad_rule), "bad rule length");
+	check_reject_s46(bad_portparams, sizeof(bad_portparams),
+	    "bad portparams length");
+	check_reject_s46(bad_portparams_span, sizeof(bad_portparams_span),
+	    "bad portparams span");
+	check_reject_s46(duplicate_br, sizeof(duplicate_br), "duplicate BR");
+	check_reject_s46(duplicate_portparams, sizeof(duplicate_portparams),
+	    "duplicate portparams");
+	check_reject_s46(unknown_subopt, sizeof(unknown_subopt),
+	    "unknown MAP-E container sub-option");
+	check_reject_s46(unknown_rule_subopt, sizeof(unknown_rule_subopt),
+	    "unknown S46_RULE sub-option");
+}
+
+static void
+check_raw_s46_mape_cosmote(void)
+{
+	/*
+	 * Sanitized from a Cosmote DHCPv6 Reply.  The container has the
+	 * rule before the BR and a zero-length PSID.
+	 */
+	static const uint8_t s46_mape[] = {
+	    0x00, 0x59, 0x00, 0x16,
+	    0x00, 0x0e, 0x18, 0x57, 0xca, 0x3a, 0x00, 0x2a,
+	    0x2a, 0x02, 0x05, 0x86, 0x62, 0x00,
+	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x00, 0x00, 0x00,
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x2a, 0x02, 0x05, 0x86, 0x00, 0x00, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x06,
+	};
+	struct s46_mape mape;
+
+	memset(&mape, 0, sizeof(mape));
+	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
+	    &mape) != 0)
+		errx(1, "Cosmote raw S46 MAP-E option rejected");
+	if (!mape.valid || !mape.br_valid || !mape.rules[0].valid)
+		errx(1, "Cosmote raw S46 MAP-E state incomplete");
+	if (mape.rule_count != 1)
+		errx(1, "Cosmote raw S46 MAP-E rule count mismatch");
+
+	check_in6("2a02:586::406", &mape.br);
+	check_in("87.202.58.0", &mape.rules[0].prefix4);
+	check_in6("2a02:586:6200::", &mape.rules[0].prefix6);
+
+	if (mape.rules[0].flags != 0 || mape.rules[0].ea_len != 14 ||
+	    mape.rules[0].prefix4_len != 24 || mape.rules[0].prefix6_len != 42)
+		errx(1, "Cosmote raw S46 MAP-E rule fields mismatch");
+	if (!mape.rules[0].portparams.valid ||
+	    mape.rules[0].portparams.offset != 6 ||
+	    mape.rules[0].portparams.psid_len != 0 ||
+	    mape.rules[0].portparams.psid != 0)
+		errx(1, "Cosmote raw S46 MAP-E port parameters mismatch");
+}
+
+static void
+check_raw_s46_mape_multiple_rules(void)
+{
+	static const uint8_t s46_mape[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	    0x00, 0x59, 0x00, 0x17,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
+	    0x00, 0x5d, 0x00, 0x04, 0x06, 0x08, 0x2a, 0x00,
+	    0x00, 0x59, 0x00, 0x17,
+	    0x80, 0x10, 0x18, 0xc6, 0x33, 0x64, 0x00, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x02, 0x00, 0x00,
+	    0x00, 0x5d, 0x00, 0x04, 0x04, 0x06, 0x44, 0x00,
+	};
+	struct s46_mape mape;
+
+	memset(&mape, 0, sizeof(mape));
+	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
+	    &mape) != 0)
+		errx(1, "multiple-rule raw S46 MAP-E option rejected");
+	if (!mape.valid || !mape.br_valid || mape.rule_count != 2)
+		errx(1, "multiple-rule raw S46 MAP-E state incomplete");
+
+	check_in6("2001:db8:ffff::1", &mape.br);
+	check_in("192.0.2.0", &mape.rules[0].prefix4);
+	check_in6("2001:db8:100::", &mape.rules[0].prefix6);
+	if (mape.rules[0].flags != 0 || mape.rules[0].ea_len != 16 ||
+	    mape.rules[0].prefix4_len != 24 || mape.rules[0].prefix6_len != 56)
+		errx(1, "first MAP-E rule fields mismatch");
+	if (!mape.rules[0].portparams.valid ||
+	    mape.rules[0].portparams.offset != 6 ||
+	    mape.rules[0].portparams.psid_len != 8 ||
+	    mape.rules[0].portparams.psid != 42)
+		errx(1, "first MAP-E rule port parameters mismatch");
+
+	check_in("198.51.100.0", &mape.rules[1].prefix4);
+	check_in6("2001:db8:200::", &mape.rules[1].prefix6);
+	if (mape.rules[1].flags != 0x80 || mape.rules[1].ea_len != 16 ||
+	    mape.rules[1].prefix4_len != 24 || mape.rules[1].prefix6_len != 56)
+		errx(1, "second MAP-E rule fields mismatch");
+	if (!mape.rules[1].portparams.valid ||
+	    mape.rules[1].portparams.offset != 4 ||
+	    mape.rules[1].portparams.psid_len != 6 ||
+	    mape.rules[1].portparams.psid != 17)
+		errx(1, "second MAP-E rule port parameters mismatch");
+}
+
+static void
+check_reject_too_many_rules(void)
+{
+	static const uint8_t s46_rule[] = {
+	    0x00, 0x59, 0x00, 0x0f,
+	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x00, 0x38,
+	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00,
+	};
+	static const uint8_t s46_br[] = {
+	    0x00, 0x5a, 0x00, 0x10,
+	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	};
+	uint8_t buf[sizeof(s46_br) + sizeof(s46_rule) *
+	    (MAX_S46_RULES + 1)];
+	uint8_t *p;
+	struct s46_mape mape;
+	size_t i;
+
+	p = buf;
+	memcpy(p, s46_br, sizeof(s46_br));
+	p += sizeof(s46_br);
+	for (i = 0; i < MAX_S46_RULES + 1; i++) {
+		memcpy(p, s46_rule, sizeof(s46_rule));
+		p += sizeof(s46_rule);
+	}
+
+	memset(&mape, 0, sizeof(mape));
+	if (parse_s46_mape_options(buf, sizeof(buf), &mape) == 0)
+		errx(1, "accepted too many MAP-E rules");
+}
+
+static void
+check_reject_s46(const uint8_t *buf, size_t len, const char *descr)
+{
+	struct s46_mape mape;
+
+	memset(&mape, 0, sizeof(mape));
+	if (parse_s46_mape_options((uint8_t *)buf, len, &mape) == 0)
+		errx(1, "accepted invalid raw S46 MAP-E option: %s", descr);
+}
+
+int
+main(void)
+{
+	check_valid_mape();
+	check_valid_mape_multiple_rules();
+	check_incomplete_mape_lease();
+	check_invalid_portparams();
+	check_duplicate_mape_lease();
+	check_portparams_without_rule();
+	check_raw_s46_mape();
+	check_raw_s46_mape_cosmote();
+	check_raw_s46_mape_multiple_rules();
+	check_reject_too_many_rules();
+	return (0);
+}
+
+int
+kw_cmp(const void *k, const void *e)
+{
+	return (strcmp(k, ((const struct keywords *)e)->k_name));
+}
+
+struct file *
+pushfile(const char *name, int secret)
+{
+	struct file *nfile;
+
+	(void)secret;
+	if ((nfile = calloc(1, sizeof(*nfile))) == NULL)
+		err(1, "calloc");
+	if ((nfile->name = strdup(name)) == NULL)
+		err(1, "strdup");
+	if ((nfile->stream = fopen(nfile->name, "r")) == NULL)
+		err(1, "%s", nfile->name);
+	nfile->lineno = TAILQ_EMPTY(&files) ? 1 : 0;
+	nfile->ungetsize = 16;
+	if ((nfile->ungetbuf = malloc(nfile->ungetsize)) == NULL)
+		err(1, "malloc");
+	TAILQ_INSERT_TAIL(&files, nfile, entry);
+	return (nfile);
+}
+
+int
+popfile(void)
+{
+	struct file *prev;
+
+	if ((prev = TAILQ_PREV(file, files, entry)) != NULL)
+		prev->errors += file->errors;
+	TAILQ_REMOVE(&files, file, entry);
+	fclose(file->stream);
+	free(file->name);
+	free(file->ungetbuf);
+	free(file);
+	file = prev;
+	return (file ? 0 : EOF);
+}
+
+static int
+igetc(void)
+{
+	if (file->ungetpos > 0)
+		return (file->ungetbuf[--file->ungetpos]);
+	return (getc(file->stream));
+}
+
+int
+lgetc(int quotec)
+{
+	int c, next;
+
+	if (quotec)
+		return (igetc());
+
+	while ((c = igetc()) == '\\') {
+		next = igetc();
+		if (next != '\n') {
+			c = next;
+			break;
+		}
+		file->lineno++;
+	}
+
+	if (c == EOF) {
+		if (file->eof_reached == 0) {
+			file->eof_reached = 1;
+			return ('\n');
+		}
+		while (c == EOF) {
+			if (file == topfile || popfile() == EOF)
+				return (EOF);
+			c = igetc();
+		}
+	}
+	return (c);
+}
+
+void
+lungetc(int c)
+{
+	void *p;
+
+	if (c == EOF)
+		return;
+	if (file->ungetpos >= file->ungetsize) {
+		p = reallocarray(file->ungetbuf, file->ungetsize, 2);
+		if (p == NULL)
+			err(1, "reallocarray");
+		file->ungetbuf = p;
+		file->ungetsize *= 2;
+	}
+	file->ungetbuf[file->ungetpos++] = c;
+}
+
+int
+findeol(void)
+{
+	int c;
+
+	while (1) {
+		c = lgetc(0);
+		if (c == '\n') {
+			file->lineno++;
+			break;
+		}
+		if (c == EOF)
+			break;
+	}
+	return (0);
+}
+
+void
+log_warn(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vwarn(fmt, ap);
+	va_end(ap);
+}
+
+void
+log_warnx(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vwarnx(fmt, ap);
+	va_end(ap);
+}
+
+void
+log_debug(const char *fmt, ...)
+{
+	(void)fmt;
+}
+
+void
+logit(int pri, const char *fmt, ...)
+{
+	va_list ap;
+
+	(void)pri;
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	fprintf(stderr, "\n");
+	va_end(ap);
+}
+
+void
+fatalx(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	verrx(1, fmt, ap);
+	va_end(ap);
+}

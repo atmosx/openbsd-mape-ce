@@ -67,6 +67,18 @@ daemon as a whole.
 .It Ic request rapid commit
 Send the rapid commit DHCPv6 option, requesting a two-message exchange
 from the server instead of the normal four-message exchange.
+.It Ic request mape on Ar name
+Request the Softwire46 MAP-E container option
+(DHCPv6 option 94)
+from the DHCPv6 server on the upstream network interface
+.Ar name .
+When this is set,
+.Xr dhcp6leased 8
+asks the server for MAP-E parameters and persists any
+BR address, mapping rules, and port parameters it learns.
+If the option is unset (the default),
+.Xr dhcp6leased 8
+does not request MAP-E and ignores any MAP-E data the server sends.
 .El
 .Ss Prefix delegation
 A list of interfaces on which to request prefix delegation:

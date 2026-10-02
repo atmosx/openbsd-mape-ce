@@ -37,8 +37,12 @@
 #define	XID_SIZE		3
 #define	SERVERID_SIZE		130 /* 2 octet type, max 128 octets data */
 #define	MAX_IA			32
+#define	MAX_S46_RULES		8
 #define	LEASE_SIZE		4096
 #define	LEASE_IA_PD_PREFIX	"ia_pd "
+#define	LEASE_MAPE_BR_PREFIX	"mape_br "
+#define	LEASE_MAPE_RULE_PREFIX	"mape_rule "
+#define	LEASE_MAPE_PORT_PREFIX	"mape_portparams "
 /* MAXDNAME from arpa/namesr.h */
 #define	DHCP6LEASED_MAX_DNSSL	1025
 #define	MAX_RDNS_COUNT		8 /* max nameserver in a RTM_PROPOSAL */
@@ -75,6 +79,14 @@
 #define	DHO_IA_PREFIX		26
 #define	DHO_SOL_MAX_RT		82
 #define	DHO_INF_MAX_RT		83
+#define	DHO_S46_RULE		89
+#define	DHO_S46_BR		90
+#define	DHO_S46_DMR		91
+#define	DHO_S46_V4V6BIND	92
+#define	DHO_S46_PORTPARAMS	93
+#define	DHO_S46_CONT_MAPE	94
+#define	DHO_S46_CONT_MAPT	95
+#define	DHO_S46_CONT_LW		96
 
 /* Status Code Option status codes */
 #define	DHCP_STATUS_SUCCESS		0
@@ -184,6 +196,32 @@ struct prefix {
 	uint32_t	 pltime;
 };
 
+struct s46_portparams {
+	int		 valid;
+	uint8_t		 offset;
+	uint8_t		 psid_len;
+	uint16_t	 psid;
+};
+
+struct s46_rule {
+	int			 valid;
+	uint8_t			 flags;
+	uint8_t			 ea_len;
+	uint8_t			 prefix4_len;
+	struct in_addr		 prefix4;
+	uint8_t			 prefix6_len;
+	struct in6_addr		 prefix6;
+	struct s46_portparams	 portparams;
+};
+
+struct s46_mape {
+	int			 valid;
+	int			 br_valid;
+	struct in6_addr		 br;
+	size_t			 rule_count;
+	struct s46_rule		 rules[MAX_S46_RULES];
+};
+
 struct ctl_engine_info {
 	uint32_t		if_index;
 	int			running;
@@ -194,6 +232,7 @@ struct ctl_engine_info {
 	uint32_t		t1;
 	uint32_t		t2;
 	struct prefix		pds[MAX_IA];
+	struct s46_mape		mape;
 };
 
 struct iface_pd_conf {
@@ -216,6 +255,7 @@ struct iface_conf {
 	    iface_ia_conf)			 iface_ia_list;
 	uint32_t				 ia_count;
 	char					 name[IF_NAMESIZE];
+	int					 request_mape;
 };
 
 struct dhcp6leased_conf {
@@ -229,6 +269,7 @@ struct imsg_ifinfo {
 	int			running;
 	int			link_state;
 	struct prefix		pds[MAX_IA];
+	struct s46_mape		mape;
 };
 
 struct imsg_dhcp {
@@ -244,11 +285,13 @@ struct imsg_req_dhcp {
 	int			 serverid_len;
 	uint8_t			 serverid[SERVERID_SIZE];
 	struct prefix		 pds[MAX_IA];
+	struct s46_mape		 mape;
 };
 
 struct imsg_lease_info {
 	uint32_t		 if_index;
 	struct prefix		 pds[MAX_IA];
+	struct s46_mape		 mape;
 };
 
 /* dhcp6leased.c */
@@ -263,6 +306,11 @@ const char		*sin6_to_str(struct sockaddr_in6 *);
 
 /* engine.c */
 const char		*dhcp_message_type2str(int);
+
+/* s46.c */
+
+int			 parse_s46_mape_options(uint8_t *, size_t,
+			     struct s46_mape *);
 
 /* frontend.c */
 struct iface_conf	*find_iface_conf(struct iface_conf_head *, char *);

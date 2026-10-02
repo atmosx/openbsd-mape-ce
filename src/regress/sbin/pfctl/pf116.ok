@@ -1,0 +1,2 @@
+source limiter "mape-test" id 1 entries 100 limit 10 inet mask 24 inet6 mask 64
+pass out on lo0 all flags S/SA nat-to (lo0) round-robin map-e-portset 1/2/3

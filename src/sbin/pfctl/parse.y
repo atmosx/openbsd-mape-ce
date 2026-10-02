@@ -216,6 +216,7 @@ struct pool_opts {
 	int			 type;
 	int			 staticport;
 	struct pf_poolhashkey	*key;
+	struct pf_mape_port	 mape;
 
 } pool_opts;
 
@@ -537,6 +538,7 @@ int	parseport(char *, struct range *r, int);
 %token	SYNPROXY FINGERPRINTS NOSYNC DEBUG SKIP HOSTID
 %token	ANTISPOOF FOR INCLUDE MATCHES
 %token	BITMASK RANDOM SOURCEHASH ROUNDROBIN LEASTSTATES STATICPORT PROBABILITY
+%token	MAPEPORTSET
 %token	WEIGHT BANDWIDTH FLOWS QUANTUM
 %token	QUEUE PRIORITY QLIMIT RTABLE RDOMAIN MINIMUM BURST PARENT
 %token	LOAD RULESET_OPTIMIZATION RTABLE RDOMAIN PRIO ONCE DEFAULT DELAY
@@ -4199,6 +4201,29 @@ pool_opt	: BITMASK	{
 			pool_opts.marker |= POM_STICKYADDRESS;
 			pool_opts.opts |= PF_POOL_STICKYADDR;
 		}
+		| MAPEPORTSET number '/' number '/' number {
+			if (pool_opts.mape.offset) {
+				yyerror("map-e-portset cannot be redefined");
+				YYERROR;
+			}
+			if ($2 <= 0 || $2 >= 16) {
+				yyerror("MAP-E PSID offset must be 1-15: %lld",
+				    $2);
+				YYERROR;
+			}
+			if ($4 <= 0 || $4 > 16 - $2) {
+				yyerror("invalid MAP-E PSID length: %lld", $4);
+				YYERROR;
+			}
+			if ($6 < 0 || $6 >= (1 << $4)) {
+				yyerror("invalid MAP-E PSID: %lld", $6);
+				YYERROR;
+			}
+			pool_opts.mape.offset = $2;
+			pool_opts.mape.psidlen = $4;
+			pool_opts.mape.psid = $6;
+		}
+
 		;
 
 routespec	: redirspec pool_opts {
@@ -5101,7 +5126,7 @@ apply_redirspec(struct pf_pool *rpool, struct pf_rule *r, struct redirspec *rs,
 			    "nat rules");
 			return (1);
 		}
-		if (rpool->proxy_port[0] != PF_NAT_PROXY_PORT_LOW &&
+		if (rpool->proxy_port[0] != PF_NAT_PROXY_PORT_LOW ||
 		    rpool->proxy_port[1] != PF_NAT_PROXY_PORT_HIGH) {
 			yyerror("the 'static-port' option can't be used when "
 			    "specifying a port range");
@@ -5109,6 +5134,25 @@ apply_redirspec(struct pf_pool *rpool, struct pf_rule *r, struct redirspec *rs,
 		}
 		rpool->proxy_port[0] = 0;
 		rpool->proxy_port[1] = 0;
+	}
+	if (rs->pool_opts.mape.offset) {
+		if (isrdr) {
+			yyerror("the 'map-e-portset' option is only valid with "
+			    "nat rules");
+			return (1);
+		}
+		if (rs->pool_opts.staticport) {
+			yyerror("the 'map-e-portset' option can't be used with "
+			    "'static-port'");
+			return (1);
+		}
+		if (rpool->proxy_port[0] != PF_NAT_PROXY_PORT_LOW ||
+		    rpool->proxy_port[1] != PF_NAT_PROXY_PORT_HIGH) {
+			yyerror("the 'map-e-portset' option can't be used when "
+			    "specifying a port range");
+			return (1);
+		}
+		rpool->mape = rs->pool_opts.mape;
 	}
 
 	return (0);
@@ -5532,6 +5576,7 @@ lookup(char *s)
 		{ "load",		LOAD},
 		{ "log",		LOG},
 		{ "loginterface",	LOGINTERFACE},
+		{ "map-e-portset",	MAPEPORTSET},
 		{ "mask",		MASK},
 		{ "match",		MATCH},
 		{ "matches",		MATCHES},

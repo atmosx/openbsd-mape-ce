@@ -1134,6 +1134,20 @@ rules, the
 option prevents
 .Xr pf 4
 from modifying the source port on TCP and UDP packets.
+.It Cm map-e-portset Ar psid-offset Ns / Ns Ar psid-length Ns / Ns Ar psid
+With
+.Cm nat-to
+rules, the
+.Cm map-e-portset
+option enables the source port translation of MAP-E (RFC 7597) Customer
+Edge. The following example sets PSID offset to 4, PSID length to 6, and PSID to
+20:
+.Bd -literal -offset indent
+match out on $gif_if nat-to ($gif_if) map-e-portset 4/6/20
+.Ed
+.Pp
+Note that, to work as a MAP-E Customer Edge, creating and configuring a
+tunneling interface are also required.
 .El
 .Pp
 When more than one redirection address or a table is specified,
@@ -3007,7 +3021,8 @@ filteropt      = user | group | flags | icmp-type | icmp6-type |
                  "rdr-to" ( redirhost | "{" redirhost-list "}" )
                  [ portspec ] [ pooltype ] |
                  "nat-to" ( redirhost | "{" redirhost-list "}" )
-                 [ portspec ] [ pooltype ] [ "static-port" ] |
+                 [ portspec ] [ pooltype ] [ "static-port" ]
+                 [ "map-e-portset" number "/" number "/" number ] |
                  [ route ] | [ "set tos" tos ] |
                  [ [ "!" ] "received-on" ( interface-name | interface-group ) ]
 

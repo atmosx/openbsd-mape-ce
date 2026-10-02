@@ -94,6 +94,9 @@ print_iface_conf(struct iface_conf *iface, int verbose)
 		print_iface_ia_conf(ia_conf, verbose);
 		printf("}\n");
 	}
+
+	if (iface->request_mape)
+		printf("request mape on %s\n", iface->name);
 }
 void
 print_config(struct dhcp6leased_conf *conf, int verbose)

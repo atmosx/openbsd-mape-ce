@@ -65,6 +65,7 @@ struct iface {
 	int			 serverid_len;
 	uint8_t			 serverid[SERVERID_SIZE];
 	struct prefix		 pds[MAX_IA];
+	struct s46_mape		 mape;
 };
 
 __dead void	 frontend_shutdown(void);
@@ -739,6 +740,7 @@ iface_data_from_imsg(struct iface* iface, struct imsg_req_dhcp *imsg)
 	iface->serverid_len = imsg->serverid_len;
 	memcpy(iface->serverid, imsg->serverid, SERVERID_SIZE);
 	memcpy(iface->pds, imsg->pds, sizeof(iface->pds));
+	memcpy(&iface->mape, &imsg->mape, sizeof(iface->mape));
 }
 
 ssize_t
@@ -754,6 +756,7 @@ build_packet(uint8_t message_type, struct iface *iface, char *if_name)
 	size_t				 i;
 	ssize_t				 len;
 	uint16_t			 request_option_code, elapsed_time;
+	size_t				 requested_count;
 	const uint16_t			 options[] = {DHO_SOL_MAX_RT,
 					     DHO_INF_MAX_RT};
 	uint8_t				*p;
@@ -848,12 +851,20 @@ build_packet(uint8_t message_type, struct iface *iface, char *if_name)
 		p += sizeof(struct dhcp_iaprefix);
 	}
 
+	requested_count = nitems(options);
+	if (iface_conf->request_mape)
+		requested_count++;
 	opt_hdr.code = htons(DHO_ORO);
-	opt_hdr.len = htons(sizeof(request_option_code) * nitems(options));
+	opt_hdr.len = htons(sizeof(request_option_code) * requested_count);
 	memcpy(p, &opt_hdr, sizeof(struct dhcp_option_hdr));
 	p += sizeof(struct dhcp_option_hdr);
 	for (i = 0; i < nitems(options); i++) {
 		request_option_code = htons(options[i]);
+		memcpy(p, &request_option_code, sizeof(uint16_t));
+		p += sizeof(uint16_t);
+	}
+	if (iface_conf->request_mape) {
+		request_option_code = htons(DHO_S46_CONT_MAPE);
 		memcpy(p, &request_option_code, sizeof(uint16_t));
 		p += sizeof(uint16_t);
 	}

@@ -1008,6 +1008,7 @@ write_lease_file(struct imsg_lease_info *imsg_lease_info)
 	char			 tmpl[] = _PATH_LEASE"XXXXXXXXXX";
 	char			 ntopbuf[INET6_ADDRSTRLEN];
 	char			*p;
+	size_t			 j, rule_count;
 
 	if (no_lease_files)
 		return;
@@ -1053,6 +1054,89 @@ write_lease_file(struct imsg_lease_info *imsg_lease_info)
 		rem -= len;
 	}
 
+	if (imsg_lease_info->mape.valid) {
+		const char	*br, *prefix4, *prefix6;
+		char		 brbuf[INET6_ADDRSTRLEN];
+		char		 prefix4buf[INET_ADDRSTRLEN];
+		char		 prefix6buf[INET6_ADDRSTRLEN];
+
+		br = inet_ntop(AF_INET6, &imsg_lease_info->mape.br, brbuf,
+		    sizeof(brbuf));
+		if (br == NULL) {
+			log_warn("%s: failed to print MAP-E BR for %s",
+			    __func__, if_name);
+			return;
+		}
+		len = snprintf(p, rem, "%s%s\n", LEASE_MAPE_BR_PREFIX,
+		    br);
+		if (len == -1 || len >= rem) {
+			log_warnx("%s: failed to encode MAP-E BR for %s",
+			    __func__, if_name);
+			return;
+		}
+		p += len;
+		rem -= len;
+
+		rule_count = imsg_lease_info->mape.rule_count;
+		if (rule_count > MAX_S46_RULES) {
+			log_warnx("%s: too many MAP-E rules for %s",
+			    __func__, if_name);
+			rule_count = MAX_S46_RULES;
+		}
+		for (j = 0; j < rule_count; j++) {
+			prefix4 = inet_ntop(AF_INET,
+			    &imsg_lease_info->mape.rules[j].prefix4,
+			    prefix4buf, sizeof(prefix4buf));
+			if (prefix4 == NULL) {
+				log_warn("%s: failed to print MAP-E IPv4 "
+				    "prefix for %s", __func__, if_name);
+				return;
+			}
+			prefix6 = inet_ntop(AF_INET6,
+			    &imsg_lease_info->mape.rules[j].prefix6,
+			    prefix6buf, sizeof(prefix6buf));
+			if (prefix6 == NULL) {
+				log_warn("%s: failed to print MAP-E IPv6 "
+				    "prefix for %s", __func__, if_name);
+				return;
+			}
+			len = snprintf(p, rem, "%s%u %u %s %u %s %u\n",
+			    LEASE_MAPE_RULE_PREFIX,
+			    imsg_lease_info->mape.rules[j].flags,
+			    imsg_lease_info->mape.rules[j].ea_len,
+			    prefix4,
+			    imsg_lease_info->mape.rules[j].prefix4_len,
+			    prefix6,
+			    imsg_lease_info->mape.rules[j].prefix6_len);
+			if (len == -1 || len >= rem) {
+				log_warnx("%s: failed to encode MAP-E rule "
+				    "for %s", __func__, if_name);
+				return;
+			}
+			p += len;
+			rem -= len;
+
+			if (imsg_lease_info->mape.rules[j].portparams.valid) {
+				len = snprintf(p, rem, "%s%u %u %u\n",
+				    LEASE_MAPE_PORT_PREFIX,
+				    imsg_lease_info->mape.rules[j].
+				    portparams.offset,
+				    imsg_lease_info->mape.rules[j].
+				    portparams.psid_len,
+				    imsg_lease_info->mape.rules[j].
+				    portparams.psid);
+				if (len == -1 || len >= rem) {
+					log_warnx("%s: failed to encode MAP-E "
+					    "port parameters for %s", __func__,
+					    if_name);
+					return;
+				}
+				p += len;
+				rem -= len;
+			}
+		}
+	}
+
 	len = sizeof(lease_buf) - rem;
 
 	if ((fd = mkstemp(tmpl)) == -1) {
@@ -1091,6 +1175,7 @@ read_lease_file(struct imsg_ifinfo *imsg_ifinfo)
 		return;
 
 	memset(imsg_ifinfo->pds, 0, sizeof(imsg_ifinfo->pds));
+	memset(&imsg_ifinfo->mape, 0, sizeof(imsg_ifinfo->mape));
 
 	if (if_indextoname(imsg_ifinfo->if_index, if_name) == NULL) {
 		log_warnx("%s: cannot find interface %d", __func__,

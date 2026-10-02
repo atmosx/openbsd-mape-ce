@@ -107,6 +107,8 @@ struct dhcp6leased_iface {
 	uint8_t				 serverid[SERVERID_SIZE];
 	struct prefix			 pds[MAX_IA];
 	struct prefix			 new_pds[MAX_IA];
+	struct s46_mape			 mape;
+	struct s46_mape			 new_mape;
 	struct timespec			 request_time;
 	struct timespec			 elapsed_time_start;
 	uint32_t			 lease_time;
@@ -146,7 +148,7 @@ int			 engine_imsg_compose_main(int, pid_t, void *, uint16_t);
 const char		*dhcp_option_type2str(int);
 const char		*dhcp_duid2str(int, uint8_t *);
 const char		*dhcp_status2str(int);
-void			 in6_prefixlen2mask(struct in6_addr *, int len);
+void			 in6_prefixlen2mask(struct in6_addr *, int);
 
 struct dhcp6leased_conf	*engine_conf;
 
@@ -593,6 +595,7 @@ send_interface_info(struct dhcp6leased_iface *iface, pid_t pid)
 	cei.t1 = iface->t1;
 	cei.t2 = iface->t2;
 	memcpy(&cei.pds, &iface->pds, sizeof(cei.pds));
+	memcpy(&cei.mape, &iface->mape, sizeof(cei.mape));
 	engine_imsg_compose_frontend(IMSG_CTL_SHOW_INTERFACE_INFO, pid, &cei,
 	    sizeof(cei));
 }
@@ -678,6 +681,9 @@ engine_update_iface(struct imsg_ifinfo *imsg_ifinfo)
 		if (iface->pds[0].prefix_len == 0)
 			memcpy(iface->pds, imsg_ifinfo->pds,
 			    sizeof(iface->pds));
+		if (!iface->mape.valid)
+			memcpy(&iface->mape, &imsg_ifinfo->mape,
+			    sizeof(iface->mape));
 
 		got_lease = 0;
 		for (i = 0; i < iface_conf->ia_count; i++) {
@@ -732,6 +738,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 	size_t			 rem;
 	uint32_t		 t1, t2, lease_time;
 	int			 serverid_len, rapid_commit = 0;
+	int			 mape_invalid = 0;
 	uint8_t			 serverid[SERVERID_SIZE];
 	uint8_t			*p;
 	char			 ifnamebuf[IF_NAMESIZE], *if_name;
@@ -754,6 +761,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 
 	serverid_len = t1 = t2 = lease_time = 0;
 	memset(iface->new_pds, 0, sizeof(iface->new_pds));
+	memset(&iface->new_mape, 0, sizeof(iface->new_mape));
 
 	p = dhcp->packet;
 	rem = dhcp->len;
@@ -855,6 +863,19 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 			}
 			rapid_commit = 1;
 			break;
+		case DHO_S46_CONT_MAPE:
+			if (iface->new_mape.valid) {
+				log_warnx("%s: ignoring duplicate S46 "
+				    "MAP-E container", __func__);
+				break;
+			}
+			if (parse_s46_mape_options(p, opt_hdr.len,
+			    &iface->new_mape) != 0) {
+				log_warnx("%s: ignoring invalid S46 MAP-E "
+				    "container", __func__);
+				mape_invalid = 1;
+			}
+			break;
 		default:
 			log_debug("unhandled option: %u", opt_hdr.code);
 			break;
@@ -894,6 +915,10 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 		    &pd->prefix, ntopbuf, INET6_ADDRSTRLEN), pd->prefix_len);
 	}
 
+	if (mape_invalid && !iface->new_mape.valid)
+		memcpy(&iface->new_mape, &iface->mape,
+		    sizeof(iface->new_mape));
+
 	switch (hdr.msg_type) {
 	case DHCPSOLICIT:
 	case DHCPREQUEST:
@@ -920,6 +945,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 		iface->serverid_len = serverid_len;
 		memcpy(iface->serverid, serverid, SERVERID_SIZE);
 		memcpy(iface->pds, iface->new_pds, sizeof(iface->pds));
+		memcpy(&iface->mape, &iface->new_mape, sizeof(iface->mape));
 		state_transition(iface, IF_REQUESTING);
 		break;
 	case DHCPREPLY:
@@ -950,6 +976,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 		else
 			iface->t2 = t2;
 		iface->lease_time = lease_time;
+		memcpy(&iface->mape, &iface->new_mape, sizeof(iface->mape));
 		clock_gettime(CLOCK_MONOTONIC, &iface->request_time);
 		state_transition(iface, IF_BOUND);
 		break;
@@ -1295,6 +1322,7 @@ request_dhcp_request(struct dhcp6leased_iface *iface)
 		imsg.serverid_len = iface->serverid_len;
 		memcpy(imsg.serverid, iface->serverid, SERVERID_SIZE);
 		memcpy(imsg.pds, iface->pds, sizeof(iface->pds));
+		memcpy(&imsg.mape, &iface->mape, sizeof(imsg.mape));
 		break;
 	}
 	switch (iface->state) {
@@ -1376,11 +1404,14 @@ configure_interfaces(struct dhcp6leased_iface *iface)
 	}
 
 	memcpy(iface->pds, iface->new_pds, sizeof(iface->pds));
+	memcpy(&iface->mape, &iface->new_mape, sizeof(iface->mape));
 	memset(iface->new_pds, 0, sizeof(iface->new_pds));
+	memset(&iface->new_mape, 0, sizeof(iface->new_mape));
 
 	memset(&imsg_lease_info, 0, sizeof(imsg_lease_info));
 	imsg_lease_info.if_index = iface->if_index;
 	memcpy(imsg_lease_info.pds, iface->pds, sizeof(iface->pds));
+	memcpy(&imsg_lease_info.mape, &iface->mape, sizeof(imsg_lease_info.mape));
 	engine_imsg_compose_main(IMSG_WRITE_LEASE, 0, &imsg_lease_info,
 	    sizeof(imsg_lease_info));
 }
@@ -1632,6 +1663,22 @@ dhcp_option_type2str(int code)
 		return "DHO_SOL_MAX_RT";
 	case DHO_INF_MAX_RT:
 		return "DHO_INF_MAX_RT";
+	case DHO_S46_RULE:
+		return "DHO_S46_RULE";
+	case DHO_S46_BR:
+		return "DHO_S46_BR";
+	case DHO_S46_DMR:
+		return "DHO_S46_DMR";
+	case DHO_S46_V4V6BIND:
+		return "DHO_S46_V4V6BIND";
+	case DHO_S46_PORTPARAMS:
+		return "DHO_S46_PORTPARAMS";
+	case DHO_S46_CONT_MAPE:
+		return "DHO_S46_CONT_MAPE";
+	case DHO_S46_CONT_MAPT:
+		return "DHO_S46_CONT_MAPT";
+	case DHO_S46_CONT_LW:
+		return "DHO_S46_CONT_LW";
 	default:
 		snprintf(buf, sizeof(buf), "Unknown [%u]", code &0xffff);
 		return buf;

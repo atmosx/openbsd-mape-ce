@@ -338,10 +338,17 @@ struct pf_poolhashkey {
 #define key32	pfk.key32
 };
 
+struct pf_mape_port {
+	u_int8_t		 offset;
+	u_int8_t		 psidlen;
+	u_int16_t		 psid;
+};
+
 struct pf_pool {
 	struct pf_addr_wrap	 addr;
 	struct pf_poolhashkey	 key;
 	struct pf_addr		 counter;
+	struct pf_mape_port	 mape;
 	char			 ifname[IFNAMSIZ];
 	struct pfi_kif		*kif;
 	int			 tblidx;

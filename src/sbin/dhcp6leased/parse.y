@@ -95,7 +95,7 @@ typedef struct {
 
 %}
 
-%token	ERROR DELEGATION FOR ON PREFIX REQUEST RAPID COMMIT
+%token	ERROR DELEGATION FOR MAPE ON PREFIX REQUEST RAPID COMMIT
 
 %token	<v.string>	STRING
 %token	<v.number>	NUMBER
@@ -108,6 +108,7 @@ grammar		: /* empty */
 		| grammar varset '\n'
 		| grammar conf_main '\n'
 		| grammar ia_pd '\n'
+		| grammar mape_request '\n'
 		| grammar error '\n'		{ file->errors++; }
 		;
 
@@ -150,6 +151,15 @@ optnl		: '\n' optnl		/* zero or more newlines */
 
 conf_main	: REQUEST RAPID COMMIT {
 			conf->rapid_commit = 1;
+		}
+		;
+
+mape_request	: REQUEST MAPE ON STRING {
+			struct iface_conf *iface;
+
+			iface = conf_get_iface($4);
+			iface->request_mape = 1;
+			free($4);
 		}
 		;
 
@@ -243,6 +253,7 @@ lookup(char *s)
 		{"commit",	COMMIT},
 		{"delegation",	DELEGATION},
 		{"for",		FOR},
+		{"mape",	MAPE},
 		{"on",		ON},
 		{"prefix",	PREFIX},
 		{"rapid",	RAPID},

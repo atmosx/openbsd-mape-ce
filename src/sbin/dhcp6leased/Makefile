@@ -1,7 +1,7 @@
 #	$OpenBSD: Makefile,v 1.2 2024/06/05 16:15:47 florian Exp $
 
 PROG=	dhcp6leased
-SRCS=	control.c dhcp6leased.c engine.c frontend.c log.c
+SRCS=	control.c dhcp6leased.c engine.c frontend.c log.c s46.c
 SRCS+=	parse.y printconf.c parse_lease.y
 
 MAN=	dhcp6leased.8 dhcp6leased.conf.5
