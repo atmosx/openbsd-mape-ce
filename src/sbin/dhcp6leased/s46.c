@@ -227,19 +227,13 @@ parse_s46_rule_options(uint8_t *p, size_t len, struct s46_rule *rule)
 			rule->portparams.offset = p[0];
 			rule->portparams.psid_len = p[1];
 			/*
-			 * RFC 7597 / RFC 7598: when S46_PORTPARAMS is
-			 * absent, the CE derives PSID-len from
-			 * EA-len - (32 - rule_ipv4_prefix_len). When
-			 * the option is present with PSID-len = 0,
-			 * the BR has explicitly told us the PSID is
-			 * empty for this rule (one IPv4 address per
-			 * prefix4 host bits, no port-set sharing)
-			 * and the encoded PSID field is unused.
-			 * Cosmote's deployment uses this shape.
-			 * The two cases must stay distinguishable for
-			 * the future MAP-E derivation code, which is
-			 * why portparams.valid is recorded separately
-			 * from rule.valid even when psid_len == 0.
+			 * RFC 7598: a zero PSID length means the encoded PSID
+			 * field is ignored. It does not by itself rule out
+			 * address sharing; MAP-E may derive the PSID from the
+			 * EA bits as described in RFC 7597.
+			 *
+			 * Keep portparams.valid even in this case: the option
+			 * still supplies an offset, unlike an absent option.
 			 */
 			if (p[1] == 0)
 				rule->portparams.psid = 0;

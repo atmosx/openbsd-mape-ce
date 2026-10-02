@@ -77,7 +77,7 @@ Current patch SHA256 values (updated when patches change):
 
 ```text
 bf4494f3133d3e79b2d9608c8e2a26d745df2aabcb87a22ae036e2e5b25768d9  patch/pf-map-e-ce/mape79.patch
-265db17d4cc1db4913adf4277a92a1d04d7eeab548da5c0049660fa8ed789e57  patch/dhcp6leased-mape-softwire46-openbsd79.patch
+a9b4e9d8f291864ae7445bc24d06c6f9d5bbdc62343c27a1522a598e2089ace6  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
 The full arm64 GENERIC.MP kernel build completed successfully (exit status 0).
