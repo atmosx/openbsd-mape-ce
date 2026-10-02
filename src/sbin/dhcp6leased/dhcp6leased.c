@@ -1054,7 +1054,7 @@ write_lease_file(struct imsg_lease_info *imsg_lease_info)
 		rem -= len;
 	}
 
-	if (imsg_lease_info->mape.valid) {
+	if (iface_conf->request_mape && imsg_lease_info->mape.valid) {
 		const char	*br, *prefix4, *prefix6;
 		char		 brbuf[INET6_ADDRSTRLEN];
 		char		 prefix4buf[INET_ADDRSTRLEN];

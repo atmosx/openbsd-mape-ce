@@ -8,25 +8,41 @@
  
  .if defined(REGRESS_FULL) || make(clean) || make(cleandir) || make(obj)
  SUBDIR+= ipsecctl pfctl
---- a/regress/sbin/dhcp6leased/Makefile
+--- /dev/null
 +++ b/regress/sbin/dhcp6leased/Makefile
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,43 @@
 +#	$OpenBSD$
 +
-+PROGS=	parse_lease_test fuzz_s46_test
++PROGS=	parse_lease_test fuzz_s46_test engine_test
 +SRCS_parse_lease_test=	parse_lease_test.c parse_lease.c s46.c
 +SRCS_fuzz_s46_test=	fuzz_s46_test.c s46.c
++SRCS_engine_test=	engine_test.c s46.c
 +
 +.PATH: ${.CURDIR}/../../../sbin/dhcp6leased
 +CFLAGS+= -I${.CURDIR}/../../../sbin/dhcp6leased
-+CLEANFILES+= parse_lease.c
++CLEANFILES+= parse_lease.c engine_types.h engine_parse.c
 +
++engine_test.o: engine_types.h engine_parse.c
++
++engine_types.h: ${.CURDIR}/../../../sbin/dhcp6leased/engine.c
++	awk '/^enum if_state \{/ || /^struct dhcp6leased_iface \{/ { p=1 } \
++	    p { print } /^};/ { p=0 }' ${.ALLSRC} > ${.TARGET}
++
++engine_parse.c: ${.CURDIR}/../../../sbin/dhcp6leased/engine.c
++	awk '/^parse_dhcp\(/ || /^in6_prefixlen2mask\(/ { print "void"; p=1 } \
++	    /^parse_ia_pd_options\(/ || /^prefixcmp\(/ { print "int"; p=1 } \
++	    p { print } /^}/ { p=0 }' ${.ALLSRC} > ${.TARGET}
++
++REGRESS_TARGETS+=	run-regress-engine_test
 +REGRESS_TARGETS+=	run-regress-parse_lease_test
 +REGRESS_TARGETS+=	run-regress-fuzz_s46_test
 +REGRESS_TARGETS+=	run-regress-fuzz_s46_test-malloc
 +
 +parse_lease.c: ${.CURDIR}/../../../sbin/dhcp6leased/parse_lease.y
 +	yacc -ppl -o ${.TARGET} ${.ALLSRC}
++
++run-regress-engine_test: engine_test
++	./engine_test
 +
 +run-regress-parse_lease_test: parse_lease_test
 +	./parse_lease_test
@@ -1062,7 +1078,7 @@
  		rem -= len;
  	}
  
-+	if (imsg_lease_info->mape.valid) {
++	if (iface_conf->request_mape && imsg_lease_info->mape.valid) {
 +		const char	*br, *prefix4, *prefix6;
 +		char		 brbuf[INET6_ADDRSTRLEN];
 +		char		 prefix4buf[INET_ADDRSTRLEN];
@@ -1280,7 +1296,15 @@
  	struct timespec			 request_time;
  	struct timespec			 elapsed_time_start;
  	uint32_t			 lease_time;
-@@ -146,7 +148,7 @@
+@@ -134,6 +136,7 @@
+ void			 request_dhcp_discover(struct dhcp6leased_iface *);
+ void			 request_dhcp_request(struct dhcp6leased_iface *);
+ void			 configure_interfaces(struct dhcp6leased_iface *);
++void			 write_iface_lease(struct dhcp6leased_iface *);
+ void			 deconfigure_interfaces(struct dhcp6leased_iface *);
+ void			 deprecate_interfaces(struct dhcp6leased_iface *);
+ int			 prefixcmp(struct prefix *, struct prefix *, int);
+@@ -146,7 +149,7 @@
  const char		*dhcp_option_type2str(int);
  const char		*dhcp_duid2str(int, uint8_t *);
  const char		*dhcp_status2str(int);
@@ -1289,7 +1313,20 @@
  
  struct dhcp6leased_conf	*engine_conf;
  
-@@ -593,6 +595,7 @@
+@@ -557,6 +560,12 @@
+ 				    &engine_conf->iface_list, if_name);
+ 				if (iface_conf == NULL)
+ 					continue;
++				if (!iface_conf->request_mape) {
++					memset(&iface->mape, 0, sizeof(iface->mape));
++					memset(&iface->new_mape, 0,
++					    sizeof(iface->new_mape));
++					write_iface_lease(iface);
++				}
+ 			}
+ 			free(ifaces);
+ 			break;
+@@ -593,6 +602,7 @@
  	cei.t1 = iface->t1;
  	cei.t2 = iface->t2;
  	memcpy(&cei.pds, &iface->pds, sizeof(cei.pds));
@@ -1297,17 +1334,17 @@
  	engine_imsg_compose_frontend(IMSG_CTL_SHOW_INTERFACE_INFO, pid, &cei,
  	    sizeof(cei));
  }
-@@ -678,6 +681,9 @@
+@@ -678,6 +688,9 @@
  		if (iface->pds[0].prefix_len == 0)
  			memcpy(iface->pds, imsg_ifinfo->pds,
  			    sizeof(iface->pds));
-+		if (!iface->mape.valid)
++		if (iface_conf->request_mape && !iface->mape.valid)
 +			memcpy(&iface->mape, &imsg_ifinfo->mape,
 +			    sizeof(iface->mape));
  
  		got_lease = 0;
  		for (i = 0; i < iface_conf->ia_count; i++) {
-@@ -732,6 +738,7 @@
+@@ -732,6 +745,7 @@
  	size_t			 rem;
  	uint32_t		 t1, t2, lease_time;
  	int			 serverid_len, rapid_commit = 0;
@@ -1315,7 +1352,7 @@
  	uint8_t			 serverid[SERVERID_SIZE];
  	uint8_t			*p;
  	char			 ifnamebuf[IF_NAMESIZE], *if_name;
-@@ -754,6 +761,7 @@
+@@ -754,6 +768,7 @@
  
  	serverid_len = t1 = t2 = lease_time = 0;
  	memset(iface->new_pds, 0, sizeof(iface->new_pds));
@@ -1323,11 +1360,13 @@
  
  	p = dhcp->packet;
  	rem = dhcp->len;
-@@ -855,6 +863,19 @@
+@@ -855,6 +870,21 @@
  			}
  			rapid_commit = 1;
  			break;
 +		case DHO_S46_CONT_MAPE:
++			if (!iface_conf->request_mape)
++				break;
 +			if (iface->new_mape.valid) {
 +				log_warnx("%s: ignoring duplicate S46 "
 +				    "MAP-E container", __func__);
@@ -1343,7 +1382,7 @@
  		default:
  			log_debug("unhandled option: %u", opt_hdr.code);
  			break;
-@@ -893,6 +914,10 @@
+@@ -893,6 +923,10 @@
  		    __func__, pd->pltime, pd->vltime, inet_ntop(AF_INET6,
  		    &pd->prefix, ntopbuf, INET6_ADDRSTRLEN), pd->prefix_len);
  	}
@@ -1354,7 +1393,7 @@
  
  	switch (hdr.msg_type) {
  	case DHCPSOLICIT:
-@@ -920,6 +945,7 @@
+@@ -920,6 +954,7 @@
  		iface->serverid_len = serverid_len;
  		memcpy(iface->serverid, serverid, SERVERID_SIZE);
  		memcpy(iface->pds, iface->new_pds, sizeof(iface->pds));
@@ -1362,7 +1401,7 @@
  		state_transition(iface, IF_REQUESTING);
  		break;
  	case DHCPREPLY:
-@@ -950,6 +976,7 @@
+@@ -950,6 +985,7 @@
  		else
  			iface->t2 = t2;
  		iface->lease_time = lease_time;
@@ -1370,7 +1409,7 @@
  		clock_gettime(CLOCK_MONOTONIC, &iface->request_time);
  		state_transition(iface, IF_BOUND);
  		break;
-@@ -1295,6 +1322,7 @@
+@@ -1295,6 +1331,7 @@
  		imsg.serverid_len = iface->serverid_len;
  		memcpy(imsg.serverid, iface->serverid, SERVERID_SIZE);
  		memcpy(imsg.pds, iface->pds, sizeof(iface->pds));
@@ -1378,13 +1417,29 @@
  		break;
  	}
  	switch (iface->state) {
-@@ -1376,11 +1404,14 @@
+@@ -1322,7 +1359,6 @@
+ 	struct iface_conf	*iface_conf;
+ 	struct iface_ia_conf	*ia_conf;
+ 	struct iface_pd_conf	*pd_conf;
+-	struct imsg_lease_info	 imsg_lease_info;
+ 	uint32_t	 	 i;
+ 	char		 	 ntopbuf[INET6_ADDRSTRLEN];
+ 	char			 ifnamebuf[IF_NAMESIZE], *if_name;
+@@ -1376,11 +1412,22 @@
  	}
  
  	memcpy(iface->pds, iface->new_pds, sizeof(iface->pds));
 +	memcpy(&iface->mape, &iface->new_mape, sizeof(iface->mape));
  	memset(iface->new_pds, 0, sizeof(iface->new_pds));
 +	memset(&iface->new_mape, 0, sizeof(iface->new_mape));
++
++	write_iface_lease(iface);
++}
++
++void
++write_iface_lease(struct dhcp6leased_iface *iface)
++{
++	struct imsg_lease_info	 imsg_lease_info;
  
  	memset(&imsg_lease_info, 0, sizeof(imsg_lease_info));
  	imsg_lease_info.if_index = iface->if_index;
@@ -1393,7 +1448,7 @@
  	engine_imsg_compose_main(IMSG_WRITE_LEASE, 0, &imsg_lease_info,
  	    sizeof(imsg_lease_info));
  }
-@@ -1632,6 +1663,22 @@
+@@ -1632,6 +1679,22 @@
  		return "DHO_SOL_MAX_RT";
  	case DHO_INF_MAX_RT:
  		return "DHO_INF_MAX_RT";
@@ -1464,6 +1519,14 @@
  		memcpy(p, &request_option_code, sizeof(uint16_t));
  		p += sizeof(uint16_t);
  	}
+@@ -1068,5 +1079,5 @@
+ int
+ iface_conf_cmp(struct iface_conf *a, struct iface_conf *b)
+ {
+-	return 0;
+-}
++	return (a->request_mape != b->request_mape);
++}
 --- a/sbin/dhcp6leased/parse.y
 +++ b/sbin/dhcp6leased/parse.y
 @@ -95,7 +95,7 @@
@@ -2038,3 +2101,144 @@
  .It Fl s Ar socket
  Use
  .Ar socket
+--- /dev/null
++++ b/regress/sbin/dhcp6leased/engine_test.c
+@@ -0,0 +1,138 @@
++/*	$OpenBSD$ */
++
++/* Exercise the engine's packet parser without sockets or state timers. */
++#include <sys/types.h>
++#include <sys/queue.h>
++#include <sys/socket.h>
++#include <net/if.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <assert.h>
++#include <event.h>
++#include <imsg.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++#include <vis.h>
++
++#include "dhcp6leased.h"
++#include "engine_types.h"
++
++static struct dhcp6leased_conf conf;
++static struct dhcp6leased_conf *engine_conf = &conf;
++static struct iface_conf iface_conf;
++static struct dhcp_duid duid;
++
++void parse_dhcp(struct dhcp6leased_iface *, struct imsg_dhcp *);
++int parse_ia_pd_options(uint8_t *, size_t, struct prefix *);
++int prefixcmp(struct prefix *, struct prefix *, int);
++void in6_prefixlen2mask(struct in6_addr *, int);
++#define log_warn log_warnx
++#define fatalx fatal
++
++void
++log_warnx(const char *fmt, ...)
++{
++	(void)fmt;
++}
++
++void
++log_debug(const char *fmt, ...)
++{
++	(void)fmt;
++}
++
++int
++log_getverbose(void)
++{
++	return (0);
++}
++
++static void
++fatal(const char *fmt, ...)
++{
++	(void)fmt;
++	abort();
++}
++
++static const char *
++dhcp_duid2str(int len, uint8_t *p)
++{
++	(void)len;
++	(void)p;
++	return ("server");
++}
++
++static const char *
++dhcp_status2str(int code)
++{
++	(void)code;
++	return ("status");
++}
++
++const char *
++dhcp_message_type2str(int code)
++{
++	(void)code;
++	return ("message");
++}
++
++static const char *
++dhcp_option_type2str(int code)
++{
++	(void)code;
++	return ("option");
++}
++
++struct iface_conf *
++find_iface_conf(struct iface_conf_head *head, char *name)
++{
++	(void)head;
++	(void)name;
++	return (&iface_conf);
++}
++
++static void
++state_transition(struct dhcp6leased_iface *iface, enum if_state state)
++{
++	iface->state = state;
++}
++
++#include "engine_parse.c"
++
++int
++main(void)
++{
++	struct dhcp6leased_iface iface;
++	struct imsg_dhcp packet;
++	/* REPLY, server ID, then MAP-E with one BR and a /42 rule. */
++	static const uint8_t reply[] = {
++	    7, 0, 0, 0, 0, 2, 0, 3, 0, 1, 1,
++	    0, 94, 0, 38,
++	    0, 90, 0, 16,
++	    0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0,
++	    0, 0, 0, 0, 0, 0, 0, 1,
++	    0, 89, 0, 14,
++	    0, 14, 24, 192, 0, 2, 0, 42,
++	    0x20, 1, 0x0d, 0xb8, 0, 0
++	};
++	int enabled;
++
++	SIMPLEQ_INIT(&iface_conf.iface_ia_list);
++	for (enabled = 0; enabled < 2; enabled++) {
++		memset(&iface, 0, sizeof(iface));
++		memset(&packet, 0, sizeof(packet));
++		iface.if_index = if_nametoindex("lo0");
++		assert(iface.if_index != 0);
++		iface.state = IF_REQUESTING;
++		iface_conf.request_mape = enabled;
++		memcpy(packet.packet, reply, sizeof(reply));
++		packet.len = sizeof(reply);
++		parse_dhcp(&iface, &packet);
++		assert(iface.state == IF_BOUND);
++		assert(iface.mape.valid == enabled);
++	}
++	return (0);
++}

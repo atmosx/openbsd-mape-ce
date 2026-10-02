@@ -56,7 +56,7 @@ Case 68 covers malformed parameters, incompatible options, custom port
 ranges with either endpoint changed, zero-length PSIDs, and an oversized
 PSID length. Upstream case 115 is preserved.
 
-## Validation evidence for this revision
+## Original 7.9 validation evidence
 
 Checks on `vm02` (OpenBSD 7.9, arm64):
 
@@ -73,11 +73,11 @@ Checks on `vm02` (OpenBSD 7.9, arm64):
   failed the same test as a negative control.
 - The corrected `pf_lb.o` compiled in the arm64 GENERIC.MP configuration.
 
-Patch SHA256 values:
+Current patch SHA256 values (updated when patches change):
 
 ```text
 11febf940c050aa129cf60e2aa64a7060bc5b51da14cc0e625bb2bc7f061e99c  patch/pf-map-e-ce/mape79.patch
-f784d4385494add480c2994cd1137c76f4e2422bde3f09433458785ea4874df1  patch/dhcp6leased-mape-softwire46-openbsd79.patch
+7d0f546211d06371d12478efca29e6a5cc88c20c34dccd86a74b51191aeb2cc5  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
 The full arm64 GENERIC.MP kernel build completed successfully (exit status 0).
@@ -105,3 +105,11 @@ snapshot or full backup and console access:
 Builds, parser regressions, and stubbed allocator tests alone do not establish
 that this gate has passed. The migration remains experimental until the
 packet-path and lifecycle checks are completed.
+
+## Follow-up regression checks
+
+The MAP-E opt-in fix was built and its DHCP regressions run in an isolated
+build directory on vm02 (OpenBSD 7.9 arm64). The engine regression extracts
+the actual packet parser and stubs state transitions; it checks acceptance
+with MAP-E enabled and rejection while disabled. It is not a live DHCP
+exchange or a kernel packet-path test. No running services were changed.

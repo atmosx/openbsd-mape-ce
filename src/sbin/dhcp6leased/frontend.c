@@ -1079,5 +1079,5 @@ changed_ifaces(struct dhcp6leased_conf *oconf, struct dhcp6leased_conf *nconf)
 int
 iface_conf_cmp(struct iface_conf *a, struct iface_conf *b)
 {
-	return 0;
+	return (a->request_mape != b->request_mape);
 }

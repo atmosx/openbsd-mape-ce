@@ -136,6 +136,7 @@ void			 iface_timeout(int, short, void *);
 void			 request_dhcp_discover(struct dhcp6leased_iface *);
 void			 request_dhcp_request(struct dhcp6leased_iface *);
 void			 configure_interfaces(struct dhcp6leased_iface *);
+void			 write_iface_lease(struct dhcp6leased_iface *);
 void			 deconfigure_interfaces(struct dhcp6leased_iface *);
 void			 deprecate_interfaces(struct dhcp6leased_iface *);
 int			 prefixcmp(struct prefix *, struct prefix *, int);
@@ -559,6 +560,12 @@ engine_dispatch_main(int fd, short event, void *bula)
 				    &engine_conf->iface_list, if_name);
 				if (iface_conf == NULL)
 					continue;
+				if (!iface_conf->request_mape) {
+					memset(&iface->mape, 0, sizeof(iface->mape));
+					memset(&iface->new_mape, 0,
+					    sizeof(iface->new_mape));
+					write_iface_lease(iface);
+				}
 			}
 			free(ifaces);
 			break;
@@ -681,7 +688,7 @@ engine_update_iface(struct imsg_ifinfo *imsg_ifinfo)
 		if (iface->pds[0].prefix_len == 0)
 			memcpy(iface->pds, imsg_ifinfo->pds,
 			    sizeof(iface->pds));
-		if (!iface->mape.valid)
+		if (iface_conf->request_mape && !iface->mape.valid)
 			memcpy(&iface->mape, &imsg_ifinfo->mape,
 			    sizeof(iface->mape));
 
@@ -864,6 +871,8 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 			rapid_commit = 1;
 			break;
 		case DHO_S46_CONT_MAPE:
+			if (!iface_conf->request_mape)
+				break;
 			if (iface->new_mape.valid) {
 				log_warnx("%s: ignoring duplicate S46 "
 				    "MAP-E container", __func__);
@@ -1350,7 +1359,6 @@ configure_interfaces(struct dhcp6leased_iface *iface)
 	struct iface_conf	*iface_conf;
 	struct iface_ia_conf	*ia_conf;
 	struct iface_pd_conf	*pd_conf;
-	struct imsg_lease_info	 imsg_lease_info;
 	uint32_t	 	 i;
 	char		 	 ntopbuf[INET6_ADDRSTRLEN];
 	char			 ifnamebuf[IF_NAMESIZE], *if_name;
@@ -1407,6 +1415,14 @@ configure_interfaces(struct dhcp6leased_iface *iface)
 	memcpy(&iface->mape, &iface->new_mape, sizeof(iface->mape));
 	memset(iface->new_pds, 0, sizeof(iface->new_pds));
 	memset(&iface->new_mape, 0, sizeof(iface->new_mape));
+
+	write_iface_lease(iface);
+}
+
+void
+write_iface_lease(struct dhcp6leased_iface *iface)
+{
+	struct imsg_lease_info	 imsg_lease_info;
 
 	memset(&imsg_lease_info, 0, sizeof(imsg_lease_info));
 	imsg_lease_info.if_index = iface->if_index;
