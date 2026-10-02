@@ -2,11 +2,12 @@
 package Maped;
 use strict;
 use warnings;
+use Socket qw(AF_INET AF_INET6 inet_pton);
 use Exporter 'import';
 use IO::Select;
 use POSIX qw(WNOHANG setpgid);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
-our @EXPORT_OK = qw(command status_text);
+our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text);
 
 sub status_text {
 	my ($rc) = @_;
@@ -72,5 +73,70 @@ sub command {
 	}
 	close $reader;
 	return ($status == (127 << 8) ? -1 : $status, $output);
+}
+
+# Keep port parameters attached to their enclosing rule. Select one BMR by
+# longest IPv6-prefix match (RFC 7597 section 5, RFC 7598 section 4.1).
+sub parse_lease {
+	my ($text) = @_;
+	my (@pds, @rules, $rule, $br);
+	for my $line (split /\n/, $text) {
+		$line =~ s/^\s+|\s+$//g;
+		if ($line =~ /^ia_pd\s+\d+\s+([\da-fA-F:]+)\s+(\d+)$/ ||
+		    $line =~ /^IA_PD\s+\d+:\s+([\da-fA-F:]+)\/(\d+)$/) {
+			die "invalid delegated prefix\n" unless inet_pton(AF_INET6, $1) && $2 <= 128;
+			push @pds, [$1, $2];
+		} elsif ($line =~ /^(?:mape_br|BR:)\s+([\da-fA-F:]+)$/i) {
+			die "invalid BR\n" unless inet_pton(AF_INET6, $1);
+			$br //= $1;
+		} elsif ($line =~ /^mape_rule\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+([\da-fA-F:]+)\s+(\d+)$/i ||
+		    $line =~ /^rule:\s+flags\s+(\d+)\s+ea-len\s+(\d+)\s+([\d.]+)\/(\d+)\s+([\da-fA-F:]+)\/(\d+)$/i) {
+			$rule = {};
+			@$rule{qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)} = ($1,$2,$3,$4,$5,$6);
+			die "invalid MAP rule\n" unless $4 <= 32 && $6 <= 128 && $2 <= 48 &&
+			    $6 + $2 <= 128 && inet_pton(AF_INET, $3) && inet_pton(AF_INET6, $5);
+			@$rule{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)} = (6, 0, 0);
+			push @rules, $rule;
+		} elsif ($line =~ /^mape_portparams\s+(\d+)\s+(\d+)\s+(\d+)$/i ||
+		    $line =~ /^portparams:\s+offset\s+(\d+)\s+psid-len\s+(\d+)\s+psid\s+(\d+)$/i) {
+			die "port parameters without rule\n" unless $rule;
+			die "duplicate port parameters\n" if $rule->{portparams_seen}++;
+			die "invalid port parameters\n" unless $1 <= 15 && $2 <= 16 && $1 + $2 <= 16 &&
+			    (!$2 || $3 < 2 ** $2);
+			@$rule{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)} = ($1,$2,$2 ? $3 : 0);
+		} elsif ($line =~ /^(?:ia_pd|IA_PD|mape_|BR:|rule:|portparams:)/) {
+			die "malformed provisioning line: $line\n";
+		}
+	}
+	return () unless @pds && @rules && defined $br;
+	my @selected;
+	for my $pd (@pds) {
+		my $bits = unpack('B*', inet_pton(AF_INET6, $pd->[0]));
+		my @match = sort { $b->{MAP_IPV6_PLEN} <=> $a->{MAP_IPV6_PLEN} }
+		    grep { $_->{MAP_IPV6_PLEN} <= $pd->[1] &&
+		    substr($bits, 0, $_->{MAP_IPV6_PLEN}) eq substr(unpack('B*',
+		    inet_pton(AF_INET6, $_->{MAP_IPV6_PREFIX})), 0, $_->{MAP_IPV6_PLEN}) } @rules;
+		next unless @match;
+		die "ambiguous BMR\n" if @match > 1 && $match[0]{MAP_IPV6_PLEN} == $match[1]{MAP_IPV6_PLEN};
+		push @selected, {%{$match[0]}, PD_PREFIX => join('/', @$pd), BR_IPV6 => $br};
+	}
+	die "multiple MAP delegated prefixes are not supported\n" if @selected > 1;
+	return @selected ? %{$selected[0]} : ();
+}
+
+sub complete_lease {
+	my ($l) = @_;
+	for my $key (qw(PD_PREFIX BR_IPV6 EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)) {
+		return 0 unless defined $l->{$key} && $l->{$key} ne '';
+	}
+	return 1;
+}
+
+sub lease_text {
+	my ($l) = @_;
+	my ($addr, $plen) = split '/', $l->{PD_PREFIX};
+	return "ia_pd 0 $addr $plen\nmape_br $l->{BR_IPV6}\nmape_rule " .
+	    join(' ', map { $l->{$_} // 0 } qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)) .
+	    "\nmape_portparams " . join(' ', @$l{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)}) . "\n";
 }
 1;

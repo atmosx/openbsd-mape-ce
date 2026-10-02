@@ -207,3 +207,16 @@ implement tunnel ICMP error translation or kernel tunnel PMTU handling.
 These settings follow the overhead and fragmentation guidance in RFC 7597
 §§8.2–8.3, RFC 8200 §5, RFC 8201, and RFC 8900. Kernel tunnel PMTU/error
 relaying remains outside this change's scope.
+
+### Provisioning snapshots
+
+The daemon and derivation helper share a lease parser. Port parameters stay
+attached to their rule, and the BMR is selected by longest IPv6-prefix match
+(RFC 7597 §5 and RFC 7598 §4.1). Omitted port parameters default to offset 6
+and an EA-derived PSID. Equal-length ambiguous rules and multiple matching
+end-user prefixes are rejected rather than silently choosing the last one.
+This remains a single-domain, hub-and-spoke implementation, not mesh support.
+
+`maped-up` receives a private snapshot from the daemon; derivation does not
+reread changing lease sources during that operation. Standalone derivation
+can read a lease file or control output, but never merges their fields.

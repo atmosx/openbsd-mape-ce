@@ -19,7 +19,8 @@ use warnings;
 use Getopt::Std;
 use FindBin;
 use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
-use Maped qw(command status_text);
+use Maped qw(command status_text parse_lease complete_lease lease_text);
+use File::Temp qw(tempfile);
 use File::Path qw(make_path);
 use POSIX qw(setsid strftime);
 use Sys::Syslog qw(:standard :macros);
@@ -189,7 +190,8 @@ sub dirname {
 }
 
 sub run_once {
-	my $snapshot = lease_snapshot();
+	my $snapshot = eval { lease_snapshot() };
+	if ($@) { log_warn("cannot read provisioning: $@"); return 0; }
 	if (!complete_snapshot($snapshot)) {
 		log_warn("lease data incomplete; waiting");
 		return 0;
@@ -212,7 +214,12 @@ sub run_once {
 	} else {
 		log_info("MAP-E lease data unchanged but runtime needs repair: $runtime_reason");
 	}
-	my ($rc, $out) = run_command($maped_up, $conf);
+	my ($fh, $path) = tempfile("lease.XXXXXXXX", DIR => $state_dir);
+	my %lease = map { split /=/, $_, 2 } split /\n/, $snapshot;
+	print {$fh} lease_text(\%lease) or die "maped: snapshot write: $!";
+	close $fh or die "maped: snapshot close: $!";
+	my ($rc, $out) = run_command($maped_up, $conf, $path);
+	unlink $path;
 	if ($rc == 0) {
 		write_state($snapshot);
 		log_info("MAP-E reconfiguration complete");
@@ -297,18 +304,15 @@ sub lease_snapshot {
 
 	if ($conf{LEASE_FILE} && -r $conf{LEASE_FILE}) {
 		log_debug("reading lease file $conf{LEASE_FILE}");
-		%lease = parse_lease_text(read_file($conf{LEASE_FILE}));
+		%lease = parse_lease(read_file($conf{LEASE_FILE}));
 	}
 
 	if (!complete_lease(\%lease)) {
 		my $lease_if = $conf{LEASE_IF} || $conf{WAN_IF};
 		if ($lease_if) {
 			log_debug("reading dhcp6leasectl for $lease_if");
-			my %cmd_lease = parse_lease_text(read_cmd($dhcp6leasectl, "-l", $lease_if));
-			for my $key (keys %cmd_lease) {
-				$lease{$key} = $cmd_lease{$key}
-				    unless exists $lease{$key} && defined $lease{$key} && $lease{$key} ne "";
-			}
+			my %cmd_lease = parse_lease(read_cmd($dhcp6leasectl, "-l", $lease_if));
+			%lease = %cmd_lease;
 		}
 	}
 
@@ -318,53 +322,10 @@ sub lease_snapshot {
 	);
 }
 
-sub parse_lease_text {
-	my ($text) = @_;
-	my %lease;
-
-	for my $line (split /\n/, $text) {
-		$line =~ s/^\s+//;
-		$line =~ s/\s+$//;
-		next if $line eq "";
-
-		if ($line =~ /^ia_pd\s+\d+\s+([0-9a-fA-F:]+)\s+(\d{1,3})\b/ ||
-		    $line =~ /^IA_PD\s+\d+:\s+([0-9a-fA-F:]+)\/(\d{1,3})\b/) {
-			$lease{PD_PREFIX} = "$1/$2";
-			next;
-		}
-		if ($line =~ /^mape_br\s+([0-9a-fA-F:]+)\b/i ||
-		    $line =~ /^BR:\s+([0-9a-fA-F:]+)\b/i) {
-			$lease{BR_IPV6} = $1;
-			next;
-		}
-		if ($line =~ /^mape_rule\s+(\d+)\s+(\d+)\s+([0-9.]+)\s+(\d+)\s+([0-9a-fA-F:]+)\s+(\d+)\b/i ||
-		    $line =~ /^rule:\s+flags\s+(\d+)\s+ea-len\s+(\d+)\s+([0-9.]+)\/(\d+)\s+([0-9a-fA-F:]+)\/(\d+)\b/i) {
-			@lease{qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)} =
-			    ($1, $2, $3, $4, $5, $6);
-			next;
-		}
-		if ($line =~ /^mape_portparams\s+(\d+)\s+(\d+)\s+(\d+)\b/i ||
-		    $line =~ /^portparams:\s+offset\s+(\d+)\s+psid-len\s+(\d+)\s+psid\s+(\d+)\b/i) {
-			@lease{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)} = ($1, $2, $3);
-			next;
-		}
-	}
-
-	return %lease;
-}
-
 sub complete_snapshot {
 	my ($snapshot) = @_;
 	my %lease = map { split /=/, $_, 2 } grep { $_ ne "" } split /\n/, $snapshot;
 	return complete_lease(\%lease);
-}
-
-sub complete_lease {
-	my ($lease) = @_;
-	for my $key (qw(PD_PREFIX BR_IPV6 EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)) {
-		return 0 unless exists $lease->{$key} && defined $lease->{$key} && $lease->{$key} ne "";
-	}
-	return 1;
 }
 
 sub read_file {

@@ -18,6 +18,9 @@ use strict;
 use warnings;
 use Socket qw(AF_INET AF_INET6 inet_pton inet_ntop);
 use Math::BigInt;
+use FindBin;
+use lib "$FindBin::Bin";
+use Maped qw(parse_lease complete_lease command);
 
 sub diex { die "maped-derive: @_\n"; }
 
@@ -85,6 +88,7 @@ sub network_int {
 
 sub find_pd_prefix {
 	my ($lease) = @_;
+	return $lease->{PD_PREFIX} if $ENV{MAPED_SNAPSHOT};
 	return $ENV{PD_PREFIX} if $ENV{PD_PREFIX};
 	return $lease->{PD_PREFIX} if $lease->{PD_PREFIX};
 
@@ -115,78 +119,26 @@ sub find_pd_prefix {
 	diex("could not find delegated prefix; set PD_PREFIX=.../... in /etc/maped.conf for testing");
 }
 
-sub parse_dhcp6leased_text {
-	my ($text) = @_;
-	my %lease;
-
-	for my $line (split /\n/, $text) {
-		$line = trim($line);
-		next if $line eq "";
-
-		if ($line =~ /^ia_pd\s+\d+\s+([0-9a-fA-F:]+)\s+(\d{1,3})\b/) {
-			$lease{PD_PREFIX} = "$1/$2";
-			next;
-		}
-		if ($line =~ /^IA_PD\s+\d+:\s+([0-9a-fA-F:]+)\/(\d{1,3})\b/) {
-			$lease{PD_PREFIX} = "$1/$2";
-			next;
-		}
-		if ($line =~ /^mape_br\s+([0-9a-fA-F:]+)\b/i || $line =~ /^BR:\s+([0-9a-fA-F:]+)\b/i) {
-			$lease{BR_IPV6} = $1;
-			next;
-		}
-		if ($line =~ /^mape_rule\s+(\d+)\s+(\d+)\s+([0-9.]+)\s+(\d+)\s+([0-9a-fA-F:]+)\s+(\d+)\b/i) {
-			@lease{qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)} =
-			    ($1, $2, $3, $4, $5, $6);
-			next;
-		}
-		if ($line =~ /^rule:\s+flags\s+(\d+)\s+ea-len\s+(\d+)\s+([0-9.]+)\/(\d+)\s+([0-9a-fA-F:]+)\/(\d+)\b/i) {
-			@lease{qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)} =
-			    ($1, $2, $3, $4, $5, $6);
-			next;
-		}
-		if ($line =~ /^mape_portparams\s+(\d+)\s+(\d+)\s+(\d+)\b/i) {
-			@lease{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)} = ($1, $2, $3);
-			next;
-		}
-		if ($line =~ /^portparams:\s+offset\s+(\d+)\s+psid-len\s+(\d+)\s+psid\s+(\d+)\b/i) {
-			@lease{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)} = ($1, $2, $3);
-			next;
-		}
-	}
-
-	return %lease;
-}
-
 sub read_dhcp6leased {
-	my %lease;
-
+	if ($ENV{MAPED_SNAPSHOT}) {
+		open my $fh, '<', $ENV{MAPED_SNAPSHOT} or diex("snapshot: $!");
+		local $/;
+		my %lease = parse_lease(<$fh>);
+		diex("incomplete snapshot") unless complete_lease(\%lease);
+		return %lease;
+	}
 	if ($ENV{LEASE_FILE} && -r $ENV{LEASE_FILE}) {
-		open my $fh, "<", $ENV{LEASE_FILE} or diex("cannot read $ENV{LEASE_FILE}: $!");
+		open my $fh, '<', $ENV{LEASE_FILE} or diex("lease: $!");
 		local $/;
-		%lease = parse_dhcp6leased_text(<$fh>);
+		my %lease = parse_lease(<$fh>);
+		return %lease if complete_lease(\%lease);
 	}
-
-	my $lease_if = $ENV{LEASE_IF} || $ENV{WAN_IF} || "";
-	return %lease if $lease_if eq "";
-	return %lease if $lease{PD_PREFIX} && $lease{BR_IPV6} &&
-	    $lease{MAP_IPV6_PREFIX} && $lease{MAP_IPV6_PLEN} &&
-	    $lease{MAP_IPV4_PREFIX} && $lease{MAP_IPV4_PLEN} &&
-	    $lease{EA_LEN} && $lease{PSID_OFFSET} &&
-	    exists $lease{DHCP_PSID_LEN} && exists $lease{DHCP_PSID};
-
-	my $cmd = $ENV{DHCP6LEASECTL} || "dhcp6leasectl";
-	if (open my $fh, "-|", $cmd, "-l", $lease_if) {
-		local $/;
-		my %cmd_lease = parse_dhcp6leased_text(<$fh>);
-		for my $key (keys %cmd_lease) {
-			$lease{$key} = $cmd_lease{$key}
-			    unless exists $lease{$key} && defined $lease{$key} && $lease{$key} ne "";
-		}
-		close $fh;
-	}
-
-	return %lease;
+	my $iface = $ENV{LEASE_IF} || $ENV{WAN_IF};
+	return () unless $iface;
+	my ($rc, $text) = command(30, 1024 * 1024,
+	    $ENV{DHCP6LEASECTL} || 'dhcp6leasectl', '-l', $iface);
+	diex("cannot read live lease: $text") if $rc;
+	return parse_lease($text);
 }
 
 sub value_for {

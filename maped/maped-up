@@ -5,6 +5,8 @@ set -eu
 
 CONF="${1:-/etc/maped.conf}"
 . "$CONF"
+MAPED_SNAPSHOT="${2:-}"
+export MAPED_SNAPSHOT
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DERIVE_COMMAND="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
