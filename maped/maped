@@ -20,6 +20,7 @@ use Getopt::Std;
 use FindBin;
 use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
 use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
+use MapedStatus;
 use Fcntl qw(:flock);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
 use File::Temp qw(tempfile);
@@ -65,6 +66,8 @@ my $maped_derive = resolve_command($conf{MAPED_DERIVE} || "/usr/local/libexec/ma
 my $route = resolve_command($conf{ROUTE} || "route", "/sbin/route");
 my $applied_file = "$state_dir/applied.conf";
 my $lease_deadline;
+my ($reporter, $report_plan, $last_active_plan, $confirmed_at, $expires_at);
+my ($report_status, $report_reason) = ('initializing', 'awaiting live confirmation');
 $conf{IFCONFIG} = $ifconfig;
 $conf{PFCTL} = $pfctl;
 $conf{ROUTE} = $route;
@@ -79,6 +82,9 @@ my @state_stat = stat($state_dir);
 die "maped: insecure state directory\n" if $state_stat[4] != 0 || ($state_stat[2] & 0022);
 open my $lock, '>>', "$state_dir/lock" or die "maped: lock: $!";
 flock($lock, LOCK_EX | LOCK_NB) or die "maped: another instance owns $state_dir\n";
+
+# History is reporting only. Refuse corrupt history rather than silently lose it.
+$reporter = MapedStatus->new("$state_dir/status.json");
 
 # A missing Perl sandbox must fail synchronously, before -d reports success.
 if ($^O eq 'openbsd') {
@@ -101,6 +107,7 @@ if ($daemon) {
 }
 
 sandbox_parent();
+publish_status();
 
 exit(cycle() ? 0 : 1) if $once;
 cycle();
@@ -215,13 +222,39 @@ sub atomic_write {
 	rename $tmp, $path or die "maped: rename $path: $!";
 }
 
+sub publish_status {
+	my $ok = eval {
+		$reporter->publish(status => $report_status, reason => $report_reason,
+		    plan => $report_plan, confirmed => $confirmed_at, expires => $expires_at,
+		    lease_interface => $conf{LEASE_IF} || $conf{WAN_IF},
+		    tunnel_interface => $conf{GIF_IF});
+		1;
+	};
+	log_warn("cannot publish status: $@") unless $ok;
+	return $ok;
+}
+
+sub report_active {
+	my ($plan) = @_;
+	$report_plan = {%$plan};
+	$last_active_plan = {%$plan};
+	($report_status, $report_reason) = ('active', undef);
+}
+
 sub withdraw {
 	my ($reason) = @_;
 	$lease_deadline = undef;
+	$expires_at = undef;
+	$report_plan = undef;
+	$last_active_plan = undef;
+	($report_status, $report_reason) = ('inactive', $reason);
+	publish_status();
 	return 1 unless -e $applied_file;
 	log_info("withdrawing MAP-E: $reason");
 	my ($rc, $out) = command(30, 1024 * 1024, $maped_down, $applied_file);
 	if ($rc) {
+		($report_status, $report_reason) = ('error', "withdrawal failed: $reason");
+		publish_status();
 		log_warn("withdrawal failed: " . status_text($rc) . ": $out");
 		return 0;
 	}
@@ -231,12 +264,22 @@ sub withdraw {
 }
 
 sub cycle {
-	my $result = run_once();
+	($report_status, $report_reason) = ('error', 'configuration or health check failed');
+	$report_plan = undef;
+	my $result = eval { run_once() };
+	if (my $err = $@) {
+		($report_status, $report_reason) = ('error', 'reconciliation aborted');
+		$report_plan = undef;
+		publish_status();
+		die $err;
+	}
 	if (defined $lease_deadline && clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline) {
 		withdraw('confirmed lease expired');
 		return 0;
 	}
-	return $result;
+	$last_active_plan = undef if $report_status ne 'active' && $report_status ne 'degraded';
+	my $published = publish_status();
+	return $result && $published;
 }
 
 sub run_once {
@@ -253,6 +296,8 @@ sub run_once {
 		1;
 	};
 	if (!$ok) {
+		($report_status, $report_reason) = ('degraded', 'live lease query failed');
+		$report_plan = $last_active_plan;
 		log_warn("cannot establish current provisioning: $@");
 		# A read failure cannot renew authorization. After restart there is
 		# no in-memory proof of validity, so retire our recorded state.
@@ -262,6 +307,8 @@ sub run_once {
 	}
 	return withdraw('DHCP withdrew the service') if $kind eq 'withdrawn';
 	$lease_deadline = $started + $seconds;
+	$confirmed_at = time;
+	$expires_at = time + ($lease_deadline - clock_gettime(CLOCK_MONOTONIC));
 	return withdraw('lease expired during query') if clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline;
 	my $snapshot = lease_text($lease);
 	my ($fh, $path) = tempfile("lease.XXXXXXXX", DIR => $state_dir);
@@ -291,6 +338,7 @@ sub run_once {
 	    qw(CE_IPV6 BR_IPV6 MAPE_IPV4 WAN_IF GIF_IF PSID_OFFSET PSID_LEN PSID)) {
 		if (!withdraw('provisioning changed')) { unlink $path; return 0; }
 		$lease_deadline = $started + $seconds;
+		$expires_at = time + ($lease_deadline - clock_gettime(CLOCK_MONOTONIC));
 		%previous = ();
 	}
 	my ($wan_rc, $wan) = run_command($ifconfig, $conf{WAN_IF});
@@ -309,11 +357,16 @@ sub run_once {
 	my $desired = config_text(\%plan) . $snapshot;
 	if (defined $old && $old eq $desired && !defined $runtime_reason && %previous) {
 		unlink $path;
+		report_active(\%plan);
 		return 1;
 	}
 	my $apply_reason = $runtime_reason // (!%previous ? 'no recorded ownership' :
 	    !defined $old ? 'no saved desired state' : 'desired configuration changed');
 	log_info("applying current MAP-E provisioning: $apply_reason");
+	# Do not advertise the previous runtime while an apply is in progress.
+	($report_status, $report_reason) = ('applying', $apply_reason);
+	$report_plan = undef;
+	publish_status();
 	# Record ownership before mutations, so partial failures can be retired.
 	atomic_write($applied_file, config_text(\%plan));
 	my $budget = $lease_deadline - clock_gettime(CLOCK_MONOTONIC);
@@ -327,6 +380,7 @@ sub run_once {
 		return 0;
 	}
 	atomic_write($state_file, $desired);
+	report_active(\%plan);
 	log_info('MAP-E reconfiguration complete');
 	return 1;
 }
