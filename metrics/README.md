@@ -71,12 +71,15 @@ The collector emits MAP-E and service health gauges:
 - `mape_default_route_v4`
 - `mape_default_route_v6`
 - `mape_derive_ok`
+- `mape_config_matches_lease` (live tunnel endpoints, CE IPv6 alias, IPv4
+  address and route, and all live PF NAT port sets match the derived lease)
+- `mape_collection_success{source="..."}` (command exited successfully;
+  empty output can be valid; sources: `pf_info`, `pf_interfaces`, `pf_rules`,
+  `pf_tables`, `pf_queues`, `pf_anchor`, `gif`, `wan`, `lease`, `routes`,
+  `derive`). A failed source does not emit fabricated PF counter samples.
 
 It also emits local PF and queue metrics:
 
-- `pf_states`
-- `pf_halfopen_tcp`
-- `pf_counter_total{counter="..."}`
 - `pf_queue_packets_total{queue="..."}`
 - `pf_queue_bytes_total{queue="..."}`
 - `pf_queue_dropped_packets_total{queue="..."}`
@@ -87,7 +90,11 @@ It also emits local PF and queue metrics:
 Finally, it emits `pfctl_exporter`-compatible metrics parsed from
 `pfctl -vvs info`, `pfctl -vvs Interfaces`, `pfctl -Pvs rules`, and
 `pfctl -vvs Tables`. These keep the upstream `pfctl_*` names and Prometheus
-types, including `_total` suffixes for counters.
+types, including `_total` suffixes for counters. The local `pf_states`,
+`pf_halfopen_tcp`, and `pf_counter_total` duplicates have been removed; use
+`pfctl_state_table_current_entries`, `pfctl_state_table_half_open_tcp`, and
+`pfctl_counters_*_total` instead. Update any external alerts using the old
+names.
 
 ## Grafana
 
@@ -97,9 +104,11 @@ Prometheus data source that scrapes the router from the dashboard's
 
 The dashboard includes:
 
-- MAP-E CE control-plane health.
+- MAP-E CE control-plane health and a per-source collection status panel to
+  identify which command failed when aggregate health is down.
 - node_exporter textfile freshness and scrape error checks.
-- PF queue throughput, drops, and fill.
+- PF queue throughput, drops, and fill (queues with a zero limit are excluded
+  from the fill percentage instead of displaying infinity).
 - pfctl-compatible PF rule, interface, table, state table, and counter panels.
 
 Rate panels use `$rate_window`, defaulting to `5m`, instead of Grafana's
@@ -122,7 +131,7 @@ collector executable is `mape-prometheus-metrics`.
 Metric prefixes are intentionally split:
 
 - `maped_*`, `mape_*`, `dhcp6leased_*`, and `pppoe_*` are MAP-E/router health.
-- `pf_*` are local compatibility metrics from this project.
+- `pf_queue_*` are local PF queue metrics from this project.
 - `pfctl_*` are compatible with the upstream `pfctl_exporter` metric names and
   types.
 
