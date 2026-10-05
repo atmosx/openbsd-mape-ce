@@ -1,4 +1,3 @@
-
 # Tunnel MTU and TCP MSS
 
 `GIF_MTU="auto"` (also the default when omitted) selects the current
