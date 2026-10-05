@@ -1,0 +1,53 @@
+name: maped Perl tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maped-perl-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  perl-tests:
+    name: maped Perl tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # These portable tests use core Perl modules and mocked networking tools.
+      # OpenBSD-only sandbox checks are skipped on this runner.
+      - name: Run maped Perl tests
+        id: tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          prove -v tests/maped*.t 2>&1 | tee "$RUNNER_TEMP/maped-perl-tests.log"
+
+      - name: Report test failure
+        if: ${{ failure() && steps.tests.outcome == 'failure' }}
+        shell: bash
+        run: |
+          echo '::error::maped Perl tests failed. See the test output and maped-perl-test-log artifact.'
+          {
+            echo '## maped Perl tests failed'
+            echo
+            echo 'Run `prove -v tests/maped*.t` locally to reproduce.'
+            echo 'The full TAP output is available in the test step and the `maped-perl-test-log` artifact.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload failed test log
+        if: ${{ failure() && steps.tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: maped-perl-test-log
+          path: ${{ runner.temp }}/maped-perl-tests.log
+          retention-days: 7
+          if-no-files-found: warn
