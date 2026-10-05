@@ -151,7 +151,7 @@ gif0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1452
 
 See `maped(8)` for command-line options, files, and helper paths.
 
-## 3. Prometheus metrics
+## 4. Prometheus metrics
 
 The `metrics/mape-prometheus-metrics` script writes MAP-E and PF metrics in Prometheus textfile format. Install it with:
 
@@ -179,11 +179,7 @@ full metric list.
 
 There is a companion Grafana dashboard available.
 
-# 4. Support
-
-This an experimental project. If you need assistance drop an email, I'll do my best to help but there's no guarantee.
-
-## Allocation status and history
+## 4. Allocation status and history
 
 `maped` writes `/var/db/maped/status.json` (under `MAPED_STATE_DIR` when
 configured), using base Perl's `JSON::PP`. It includes `last-update`, all current
@@ -194,3 +190,7 @@ only, not lease authorization.
 
 See [JSON status and history](docs/status-json.md) for the schema, permissions,
 freshness requirements, no-extra-package examples, and test procedure.
+
+# 5. Support
+
+This an experimental project. If you need assistance drop an email, I'll do my best to help but there's no guarantee.
