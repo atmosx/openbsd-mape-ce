@@ -15,7 +15,7 @@ MANMODE?=444
 
 SCRIPT=maped
 METRICS=mape-prometheus-metrics
-HELPERS=maped-derive maped-up maped-down maped-config
+HELPERS=maped-derive maped-up maped-down maped-config maped-publish
 CONF=maped.conf
 RCSCRIPT=maped
 MAN=maped.8
@@ -26,6 +26,7 @@ all:
 	@echo "Run 'make install' as root to install MAP-E CE maped."
 
 test:
+	perl tests/maped-publish.t
 	perl tests/maped-status.t
 	perl tests/maped.t
 	perl tests/maped-daemon.t
@@ -53,6 +54,7 @@ install-bin:
 	install -o $(OWNER) -g $(GROUP) -m 444 maped/Maped.pm $(DESTDIR)$(LIBEXECDIR)/Maped.pm
 
 	install -o $(OWNER) -g $(GROUP) -m 444 maped/MapedStatus.pm $(DESTDIR)$(LIBEXECDIR)/MapedStatus.pm
+	install -o $(OWNER) -g $(GROUP) -m 444 maped/MapedPublish.pm $(DESTDIR)$(LIBEXECDIR)/MapedPublish.pm
 
 install-conf:
 	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(SYSCONFDIR)
@@ -76,6 +78,7 @@ metrics-install:
 	install -o $(OWNER) -g $(GROUP) -m $(BINMODE) metrics/$(METRICS) $(DESTDIR)$(BINDIR)/$(METRICS)
 
 uninstall:
+	rm -f $(DESTDIR)$(LIBEXECDIR)/MapedPublish.pm
 	rm -f $(DESTDIR)$(LIBEXECDIR)/MapedStatus.pm
 	rm -f $(DESTDIR)$(LIBEXECDIR)/Maped.pm
 	rm -f $(DESTDIR)$(BINDIR)/$(SCRIPT)

@@ -22,6 +22,9 @@ export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_O
 
 eval "$("$DERIVE_COMMAND")"
 
+# Render only the daemon's validated candidate, not a mutable service file.
+PUBLISH_RULES=$("$SCRIPT_DIR/maped-publish" "$CONF")
+
 echo "Derived MAP-E values:"
 echo "  PD_PREFIX=$PD_PREFIX"
 echo "  CE_IPV6=$CE_IPV6"
@@ -107,8 +110,9 @@ match out on $GIF_IF inet from $LAN_NET to any nat-to ($GIF_IF) map-e-portset $P
 pass out quick on $WAN_IF inet6 proto 4 from $CE_IPV6 to $BR_IPV6 keep state
 pass in  quick on $WAN_IF inet6 proto 4 from $BR_IPV6 to $CE_IPV6 keep state
 
-# Return traffic is admitted by PF state. The parent ruleset must explicitly
-# permit any unsolicited inbound services; never open all CE ports here.
+# Return traffic is admitted by PF state. Only explicitly published
+# endpoints admit unsolicited tunnel IPv4 traffic.
+$PUBLISH_RULES
 pass out quick on $GIF_IF inet from ($GIF_IF) to any keep state
 EOF
 
