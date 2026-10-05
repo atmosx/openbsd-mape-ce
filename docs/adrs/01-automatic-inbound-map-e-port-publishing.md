@@ -52,7 +52,7 @@ The problem is that the ISP can change the IPv6, IPv4 and port-range allocation 
 
 ## Proposal
 
-**Proposed:** Add optional inbound publishing to `maped`. An administrator supplies a JSON service file through `MAPED_PUBLISH_FILE` in `/etc/maped.conf`; without that setting, publishing is disabled. Initially support router-local IPv4 targets at `127.0.0.1`, with one TCP or UDP endpoint per service.
+**Implemented:** Add optional inbound publishing to `maped`. An administrator supplies a JSON service file through `MAPED_PUBLISH_FILE` in `/etc/maped.conf`; without that setting, publishing is disabled. Initially support router-local IPv4 targets at `127.0.0.1`, with one TCP or UDP endpoint per service.
 
 Optional administrator-managed PF source tables restrict who can connect; absent a table, the generated rule uses `from any`.
 
@@ -62,7 +62,8 @@ Extend the existing reconciliation path and `mape` PF anchor rather than adding 
 
 ## Status
 
-Review
+Implemented; portable tests pass. Native OpenBSD PF and external packet-path
+validation remain deployment checks.
 
 ## Assumptions
 
@@ -94,4 +95,6 @@ Configure a router-local service once; assign only currently permitted MAP-E por
 
 ## Related artifacts
 
+[Publishing setup](../inbound-publishing.md), [service JSON](../../examples/maped-publish.json),
+[published endpoint example](../../examples/maped-published-endpoints.json),
 [`maped-up`](../../maped/maped-up), [`maped` manual](../../maped/maped.8), [status JSON](../status-json.md), and [example PF rules](../../examples/pf.conf).

@@ -129,6 +129,10 @@ Install the matching patched control utility before upgrading maped.
 Path used to store the generated
 .Xr pf 4
 anchor.
+.It Va MAPED_PUBLISH_FILE
+Optional JSON service file, read at startup.
+Publishing is disabled when unset.
+Restart after editing this file.
 .It Va MAPED_UP
 Runtime configuration helper.
 .It Va MAPED_DOWN
@@ -157,6 +161,45 @@ Reserve the configured GIF interface and the mape PF anchor for this daemon.
 Cleanup deletes the default route only when it still belongs to the recorded
 tunnel, and removes the CE alias only when maped originally added it.
 Legacy lease.state files alone are not ownership records.
+.Sh INBOUND PUBLISHING
+The optional publishing JSON object contains a
+.Cm services
+array.
+Each entry requires a unique
+.Cm name ,
+a
+.Cm protocol
+of tcp or udp,
+.Cm target_address
+of 127.0.0.1, and a
+.Cm target_port
+from 1 through 65535.
+An optional
+.Cm source_table
+names an administrator-managed PF table without angle brackets.
+Without a table, the rule permits any source.
+Names start with a letter and contain at most 48 letters, digits, underscores
+or hyphens; table names contain at most 31 letters, digits or underscores and
+must not start with a digit.
+Invalid or unreadable configured files stop startup.
+.Pp
+Valid previous assignments are retained, then remaining services receive the
+lowest permitted free external port at or above 1024 in service-name order,
+separately for TCP and UDP.
+Saved assignments never authorize an allocation.
+Insufficient ports reject the whole candidate, not just individual services.
+.Pp
+The complete mape anchor is validated and loaded with generated
+.Cm pass in quick
+redirects to the loopback targets.
+The administrator must position the parent anchor, manage source tables,
+and remove competing manual rules.
+Earlier block quick rules can prevent matching.
+No parent ruleset is modified and PF is never disabled.
+Unchanged healthy renewals avoid reloading PF.
+Lease withdrawal or expiry removes the owned rules.
+Publishing does not reserve ports against outbound NAT, check listeners,
+or prove ISP reachability.
 .Sh STATUS AND HISTORY
 .Nm
 atomically publishes
@@ -191,6 +234,20 @@ History survives restart and withdrawal, is not automatically pruned, and
 cannot reconstruct changes while the daemon was stopped.
 These dates are observations, not exact ISP assignment times.
 Invalid history stops startup rather than silently discarding records.
+.Pp
+The
+.Cm published_endpoints
+array lists successfully applied inbound services and their external address
+and port, protocol, loopback target and optional source table.
+It is empty outside active or temporarily degraded service.
+The persistent
+.Cm publish_events
+array records endpoint changes with UTC
+.Cm at
+timestamps, reporting status and the complete endpoint list.
+An empty endpoint list records withdrawal or loss of confirmed configuration;
+a failed cleanup does not prove kernel removal.
+Neither in-progress nor failed candidates are advertised.
 .Sh FILES
 .Bl -tag -width /usr/local/libexec/maped/maped-derive -compact
 .It Pa /etc/maped.conf
@@ -205,6 +262,8 @@ Runtime configuration helper.
 Runtime teardown helper.
 .It Pa /usr/local/libexec/maped/maped-derive
 MAP-E parameter derivation helper.
+.It Pa /usr/local/libexec/maped/maped-publish
+Internal validated-candidate PF rule renderer.
 .It Pa /var/db/maped/status.json
 Atomic JSON status and persistent allocation history (mode 0600).
 .It Pa /var/db/maped/lease.state
