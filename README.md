@@ -191,6 +191,15 @@ only, not lease authorization.
 See [JSON status and history](docs/status-json.md) for the schema, permissions,
 freshness requirements, no-extra-package examples, and test procedure.
 
+## Optional inbound IPv4 publishing
+
+Set `MAPED_PUBLISH_FILE` to a service JSON file to publish router-local TCP/UDP
+services using currently allocated ports. Assignments follow lease changes;
+healthy renewals retain valid ports without reloading PF. Publishing is disabled
+by default. See [setup and limitations](docs/inbound-publishing.md) and the
+[JSON service example](examples/maped-publish.json). Successful endpoints and
+persistent change events are included in `status.json`.
+
 # 5. Support
 
 This an experimental project. If you need assistance drop an email, I'll do my best to help but there's no guarantee.
