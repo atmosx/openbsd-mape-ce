@@ -4202,12 +4202,12 @@ pool_opt	: BITMASK	{
 			pool_opts.opts |= PF_POOL_STICKYADDR;
 		}
 		| MAPEPORTSET number '/' number '/' number {
-			if (pool_opts.mape.offset) {
+			if (pool_opts.mape.psidlen) {
 				yyerror("map-e-portset cannot be redefined");
 				YYERROR;
 			}
-			if ($2 <= 0 || $2 >= 16) {
-				yyerror("MAP-E PSID offset must be 1-15: %lld",
+			if ($2 < 0 || $2 >= 16) {
+				yyerror("MAP-E PSID offset must be 0-15: %lld",
 				    $2);
 				YYERROR;
 			}
@@ -5135,7 +5135,7 @@ apply_redirspec(struct pf_pool *rpool, struct pf_rule *r, struct redirspec *rs,
 		rpool->proxy_port[0] = 0;
 		rpool->proxy_port[1] = 0;
 	}
-	if (rs->pool_opts.mape.offset) {
+	if (rs->pool_opts.mape.psidlen) {
 		if (isrdr) {
 			yyerror("the 'map-e-portset' option is only valid with "
 			    "nat rules");
