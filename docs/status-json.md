@@ -155,9 +155,11 @@ The abbreviated allocation above is illustrative, not actual output.
   Changes while the daemon is stopped cannot be reconstructed.
 - History starts when this feature is deployed. It cannot recover earlier ISP
   changes from a current DHCP lease.
-- No automatic pruning is performed: all observed transitions are retained.
-  The full JSON is rewritten atomically each cycle, so long histories increase
-  disk I/O. Back up the file; rotation/retention is an explicit future policy.
+- No automatic pruning is performed unless `MAPED_MAX_HISTORY` is set in
+  `/etc/maped.conf` (a positive integer bounding the maximum entries kept in
+  `record` and `publish_events`). When unset, all observed transitions are
+  retained. The full JSON is rewritten atomically each cycle, so bounded
+  history prevents unbounded file growth on flash storage.
 
 To measure IPv4 churn, compare `ipv4_address` between adjacent records and count
 only actual address changes. A PSID-only or BR-only change is a separate event.

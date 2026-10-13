@@ -153,6 +153,14 @@ derives parameters directly in-process and passes the derived values to
 without spawning a separate derivation process.
 .It Va MAPED_STATE_DIR
 Directory used for daemon state.
+.It Va MAPED_MAX_HISTORY
+Optional positive integer bounding the number of entries retained in the
+.Cm record
+and
+.Cm publish_events
+arrays in
+.Pa status.json .
+When unset, all observed transitions are retained.
 .It Va MAPED_PEER_IPV4
 Peer address used on the
 .Xr gif 4
@@ -242,8 +250,9 @@ and
 .Cm last-seen
 observation dates.
 Unchanged healthy observations update the last record instead of appending.
-History survives restart and withdrawal, is not automatically pruned, and
-cannot reconstruct changes while the daemon was stopped.
+History survives restart and withdrawal, is bounded only when
+.Va MAPED_MAX_HISTORY
+is set, and cannot reconstruct changes while the daemon was stopped.
 These dates are observations, not exact ISP assignment times.
 Invalid history stops startup rather than silently discarding records.
 .Pp

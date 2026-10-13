@@ -99,4 +99,18 @@ is_deeply($broken->{publish_events}, [], 'failed write does not advance endpoint
 is(scalar @tmp, 1, 'failed publication cleans temporary file');
 open $fh, '>', $path or die $!; print {$fh} '{broken'; close $fh;
 ok(!eval { MapedStatus->new($path); 1 }, 'corrupt history not silently discarded');
+unlink $path;
+ok(!eval { MapedStatus->new($path, max_history => 0); 1 }, 'reject zero max_history');
+my $bounded = MapedStatus->new($path, max_history => 2);
+for my $idx (1..4) {
+	$p{PSID} = $idx;
+	$p{MAPED_PUBLISH_JSON} = JSON::PP::encode_json([{name => 'web', protocol => 'tcp',
+	    external_address => $p{MAPE_IPV4}, external_port => 2000 + $idx,
+	    target_address => '127.0.0.1', target_port => 80}]);
+	$d = $bounded->publish(status => 'active', plan => \%p, now => 9000 + $idx);
+}
+is(scalar @{$d->{record}}, 2, 'record bounded by max_history');
+is($d->{record}[0]{allocation}{psid}, 3, 'oldest record entries pruned');
+is(scalar @{$d->{publish_events}}, 2, 'publish_events bounded by max_history');
+is($d->{publish_events}[0]{endpoints}[0]{external_port}, 2003, 'oldest publish_events pruned');
 done_testing;

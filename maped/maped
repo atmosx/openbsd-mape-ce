@@ -97,7 +97,9 @@ open my $lock, '>>', "$state_dir/lock" or die "maped: lock: $!";
 flock($lock, LOCK_EX | LOCK_NB) or die "maped: another instance owns $state_dir\n";
 
 # History is reporting only. Refuse corrupt history rather than silently lose it.
-$reporter = MapedStatus->new("$state_dir/status.json");
+my $max_history = defined $conf{MAPED_MAX_HISTORY} && $conf{MAPED_MAX_HISTORY} ne "" ?
+    $conf{MAPED_MAX_HISTORY} : undef;
+$reporter = MapedStatus->new("$state_dir/status.json", max_history => $max_history);
 
 # A missing Perl sandbox must fail synchronously, before -d reports success.
 if ($^O eq 'openbsd') {
