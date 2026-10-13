@@ -56,7 +56,7 @@
 +.include <bsd.regress.mk>
 --- /dev/null
 +++ b/regress/sbin/dhcp6leased/parse_lease_test.c
-@@ -0,0 +1,758 @@
+@@ -0,0 +1,767 @@
 +/*	$OpenBSD$ */
 +
 +#include <sys/types.h>
@@ -390,6 +390,15 @@
 +	    0x00, 0x59, 0x00, 0x07,
 +	    0x00, 0x10, 0x18, 0xc0, 0x00, 0x02, 0x7b,
 +	};
++	static const uint8_t bad_rule_span[] = {
++	    0x00, 0x5a, 0x00, 0x10,
++	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
++	    0x00, 0x59, 0x00, 0x15,
++	    0x00, 0x20, 0x18, 0xc0, 0x00, 0x02, 0x00, 0x68,
++	    0x20, 0x01, 0x0d, 0xb8, 0x01, 0x00, 0x00, 0x00,
++	    0x00, 0x00, 0x00, 0x00, 0x00,
++	};
 +	static const uint8_t bad_portparams[] = {
 +	    0x00, 0x5a, 0x00, 0x10,
 +	    0x20, 0x01, 0x0d, 0xb8, 0xff, 0xff, 0x00, 0x00,
@@ -485,6 +494,8 @@
 +
 +	check_reject_s46(bad_br, sizeof(bad_br), "bad BR length");
 +	check_reject_s46(bad_rule, sizeof(bad_rule), "bad rule length");
++	check_reject_s46(bad_rule_span, sizeof(bad_rule_span),
++	    "bad rule prefix6_len + ea_len span");
 +	check_reject_s46(bad_portparams, sizeof(bad_portparams),
 +	    "bad portparams length");
 +	check_reject_s46(bad_portparams_span, sizeof(bad_portparams_span),
@@ -520,7 +531,6 @@
 +	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x06,
 +	};
 +	struct s46_mape mape;
-+	uint8_t multiple_br[sizeof(s46_mape) + 20];
 +
 +	memset(&mape, 0, sizeof(mape));
 +	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
@@ -562,7 +572,6 @@
 +	    0x00, 0x5d, 0x00, 0x04, 0x04, 0x06, 0x44, 0x00,
 +	};
 +	struct s46_mape mape;
-+	uint8_t multiple_br[sizeof(s46_mape) + 20];
 +
 +	memset(&mape, 0, sizeof(mape));
 +	if (parse_s46_mape_options((uint8_t *)s46_mape, sizeof(s46_mape),
@@ -817,7 +826,7 @@
 +}
 --- a/regress/sbin/dhcp6leased/fuzz_s46_test.c
 +++ b/regress/sbin/dhcp6leased/fuzz_s46_test.c
-@@ -0,0 +1,288 @@
+@@ -0,0 +1,289 @@
 +/*	$OpenBSD$ */
 +
 +#include <sys/types.h>
@@ -884,7 +893,8 @@
 +			errx(1, "accepted MAP-E state with invalid rule");
 +		if (mape->rules[i].ea_len > 48 ||
 +		    mape->rules[i].prefix4_len > 32 ||
-+		    mape->rules[i].prefix6_len > 128)
++		    mape->rules[i].prefix6_len > 128 ||
++		    mape->rules[i].prefix6_len + mape->rules[i].ea_len > 128)
 +			errx(1, "accepted MAP-E state with invalid prefix data");
 +		if (mape->rules[i].portparams.valid &&
 +		    (mape->rules[i].portparams.offset > 15 ||
@@ -1787,7 +1797,7 @@
 +				    $5);
 +				goto err;
 +			}
-+			if ($7 < 0 || $7 > 128) {
++			if ($7 < 0 || $7 > 128 || $7 + $3 > 128) {
 +				yyerror("invalid MAP-E IPv6 prefix length %lld",
 +				    $7);
 +				goto err;
@@ -1904,7 +1914,7 @@
  A list of interfaces on which to request prefix delegation:
 --- /dev/null
 +++ b/sbin/dhcp6leased/s46.c
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,260 @@
 +/*	$OpenBSD$ */
 +
 +/*
@@ -2071,7 +2081,8 @@
 +	len -= 8;
 +
 +	if (nrule.ea_len > 48 || nrule.prefix4_len > 32 ||
-+	    nrule.prefix6_len > 128) {
++	    nrule.prefix6_len > 128 ||
++	    nrule.prefix6_len + nrule.ea_len > 128) {
 +		log_warnx("%s: invalid S46 rule parameters", __func__);
 +		return (-1);
 +	}
