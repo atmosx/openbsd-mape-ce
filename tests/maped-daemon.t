@@ -195,6 +195,8 @@ like(readfile("$tmp/calls"), qr/up\ndown\n/, 'read failure cannot extend confirm
 is(status()->{status}, 'inactive', 'expired status invalidated');
 kill 'TERM', $pid;
 waitpid($pid, 0);
+is($?, 0, 'daemon exits cleanly on SIGTERM');
+like(readfile("$tmp/daemon.log"), qr/stopping on signal/, 'clean signal shutdown logged');
 
 SKIP: {
 	skip 'OpenBSD-only sandbox failure test', 2 unless $^O eq 'openbsd';

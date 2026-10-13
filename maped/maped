@@ -78,6 +78,8 @@ my $applied_file = "$state_dir/applied.conf";
 my $lease_deadline;
 my ($reporter, $report_plan, $last_active_plan, $confirmed_at, $expires_at);
 my ($report_status, $report_reason) = ('initializing', 'awaiting live confirmation');
+my $terminate = 0;
+my $lease_file_id;
 $conf{IFCONFIG} = $ifconfig;
 $conf{PFCTL} = $pfctl;
 $conf{ROUTE} = $route;
@@ -118,15 +120,21 @@ if ($daemon) {
 }
 
 sandbox_parent();
+$SIG{TERM} = $SIG{INT} = sub { $terminate = 1; };
 publish_status();
 
 exit(cycle() ? 0 : 1) if $once;
+$lease_file_id = file_id($conf{LEASE_FILE});
 cycle();
 
-while (1) {
+while (!$terminate) {
 	wait_for_change();
+	last if $terminate;
+	$lease_file_id = file_id($conf{LEASE_FILE});
 	cycle();
 }
+log_info("stopping on signal");
+exit 0;
 
 sub usage {
 	print STDERR "usage: maped [-1] [-d|-f] [-p] [-i seconds] [-l info|warn|debug] [config]\n";
@@ -451,7 +459,15 @@ sub load_kqueue {
 	return $ok;
 }
 
+sub file_id {
+	my ($path) = @_;
+	return undef unless defined $path && $path ne "";
+	my @st = stat($path);
+	return @st ? join(":", $st[0], $st[1], $st[9], $st[7]) : undef;
+}
+
 sub wait_for_change {
+	return if $terminate;
 	my $wait = $interval;
 	if (defined $lease_deadline) {
 		my $left = int($lease_deadline - clock_gettime(CLOCK_MONOTONIC));
@@ -463,16 +479,24 @@ sub wait_for_change {
 			log_debug("kqueue reported lease file event");
 			return;
 		}
+		return if $terminate;
 		log_warn("kqueue watch unavailable; falling back to polling");
 	}
 
 	log_debug("polling sleep for ${interval}s");
-	sleep $wait;
+	sleep $wait unless $terminate;
 }
 
 sub wait_for_kqueue_change {
 	my ($path, $wait) = @_;
 	open my $fh, "<", $path or return 0;
+	my @st = stat($fh);
+	my $current_id = @st ? join(":", $st[0], $st[1], $st[9], $st[7]) : undef;
+	if ((defined $lease_file_id) != (defined $current_id) ||
+	    (defined $lease_file_id && $lease_file_id ne $current_id)) {
+		close $fh;
+		return 1;
+	}
 
 	my $kq = eval { IO::KQueue->new() };
 	if (!$kq) {
@@ -498,11 +522,6 @@ sub read_file {
 	open my $fh, "<", $path or return "";
 	local $/;
 	return <$fh>;
-}
-
-sub read_cmd {
-	my ($rc, $out) = run_command(@_);
-	return $rc == 0 ? $out : "";
 }
 
 sub run_command {
