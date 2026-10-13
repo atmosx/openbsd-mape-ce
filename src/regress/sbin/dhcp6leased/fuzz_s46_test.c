@@ -64,7 +64,8 @@ check_result(const struct s46_mape *mape)
 			errx(1, "accepted MAP-E state with invalid rule");
 		if (mape->rules[i].ea_len > 48 ||
 		    mape->rules[i].prefix4_len > 32 ||
-		    mape->rules[i].prefix6_len > 128)
+		    mape->rules[i].prefix6_len > 128 ||
+		    mape->rules[i].prefix6_len + mape->rules[i].ea_len > 128)
 			errx(1, "accepted MAP-E state with invalid prefix data");
 		if (mape->rules[i].portparams.valid &&
 		    (mape->rules[i].portparams.offset > 15 ||

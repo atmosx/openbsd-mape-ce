@@ -164,7 +164,8 @@ parse_s46_rule(uint8_t *p, size_t len, struct s46_rule *rule)
 	len -= 8;
 
 	if (nrule.ea_len > 48 || nrule.prefix4_len > 32 ||
-	    nrule.prefix6_len > 128) {
+	    nrule.prefix6_len > 128 ||
+	    nrule.prefix6_len + nrule.ea_len > 128) {
 		log_warnx("%s: invalid S46 rule parameters", __func__);
 		return (-1);
 	}
