@@ -17,12 +17,13 @@ is(MapedStatus::port_set(0, 16, 65535)->{port_count}, 1, 'zero offset boundary')
 for my $bad ([16,1,0], [6,11,0], [6,6,64], [6,0,1], [-1,1,0], ['x',1,0]) {
 	ok(!eval { MapedStatus::port_set(@$bad); 1 }, 'invalid tuple rejected');
 }
-for my $a (1..15) {
+for my $a (0..15) {
 	for my $k (1..16-$a) {
 		for my $p (0, (1 << $k)-1) {
 			my $s = MapedStatus::port_set($a,$k,$p);
 			my $m = 16-$a-$k;
-			my $valid = $s->{port_count} == ((1 << $a)-1)*(1 << $m);
+			my $blocks = $a ? (1 << $a) - 1 : 1;
+			my $valid = $s->{port_count} == $blocks * (1 << $m);
 			my $last = -1;
 			for my $r (@{$s->{ranges}}) {
 				$valid &&= $r->{first} > $last && $r->{last} <= 65535 &&

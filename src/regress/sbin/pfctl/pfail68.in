@@ -1,5 +1,5 @@
 match out on lo0 nat-to (lo0) map-e-portset 1/2/3 map-e-portset 4/5/6
-match out on lo0 nat-to (lo0) map-e-portset 0/2/3
+match out on lo0 nat-to (lo0) map-e-portset -1/2/3
 match out on lo0 nat-to (lo0) map-e-portset 16/2/3
 match out on lo0 nat-to (lo0) map-e-portset 8/10/3
 match out on lo0 nat-to (lo0) map-e-portset 1/2/-1

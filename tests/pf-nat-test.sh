@@ -67,12 +67,17 @@ check_range(struct pf_pdesc *pd, struct pf_rule *r, struct pf_addr *addr,
     uint16_t *port, uint16_t low, uint16_t high, struct pf_src_node **sn)
 {
 	unsigned shift = 16 - r->nat.mape.offset - r->nat.mape.psidlen;
-	unsigned a = low >> (16 - r->nat.mape.offset);
+	unsigned a = r->nat.mape.offset ? (low >> (16 - r->nat.mape.offset)) : 0;
 	(void)pd; (void)addr; (void)port; (void)sn;
-	assert(a != 0 && a < 32768 && !visited[a]);
-	visited[a] = 1;
+	if (r->nat.mape.offset) {
+		assert(a != 0 && a < 32768 && !visited[a]);
+		visited[a] = 1;
+	} else {
+		assert(low >= 1 && !visited[0]);
+		visited[0] = 1;
+	}
 	assert(((low >> shift) & ((1U << r->nat.mape.psidlen) - 1)) == r->nat.mape.psid);
-	assert(high == (low | ((1U << shift) - 1)));
+	assert(high == ((low & ~1U) | ((1U << shift) - 1)));
 	assert(++calls <= expected_calls);
 	return exhausted == 2 ? -1 : exhausted;
 }
@@ -102,6 +107,7 @@ main(void)
 		pd.proto = family ? IPPROTO_ICMPV6 : IPPROTO_ICMP;
 		for (mape = 0; mape < 2; mape++) {
 			r.nat.mape.offset = mape ? 6 : 0;
+			r.nat.mape.psidlen = mape ? 8 : 0;
 			pd.ndport = htons(3);
 			calls = 0; addr.value = 0;
 			assert(pf_get_sport_range(&pd, &r, &addr, &port, 1024, 1039, &sn) == 0);
@@ -115,7 +121,7 @@ main(void)
 			assert(seen_high == (mape ? 1039 : 65535));
 		}
 	}
-	for (offset = 1; offset <= 15; offset++) {
+	for (offset = 0; offset <= 15; offset++) {
 		for (length = 1; length <= 16 - offset; length++) {
 			for (edge = 0; edge < 2; edge++) {
 				r.nat.mape.offset = offset;
@@ -123,9 +129,12 @@ main(void)
 				r.nat.mape.psid = edge ? (1U << length) - 1 : 0;
 				for (mode = 0; mode < 3; mode++) {
 					calls = 0; exhausted = mode;
-					expected_calls = mode == 1 ? (1U << offset) - 1 : 1;
+					expected_calls = offset == 0 ?
+					    (length == 16 && r.nat.mape.psid == 0 ? 0 : 1) :
+					    (mode == 1 ? (1U << offset) - 1 : 1);
 					memset(visited, 0, sizeof(visited));
-					assert(pf_get_sport_mape(&pd, &r, &addr, &port, &sn) == (mode != 0));
+					assert(pf_get_sport_mape(&pd, &r, &addr, &port, &sn) ==
+					    (expected_calls == 0 ? 1 : (mode != 0)));
 					assert(calls == expected_calls);
 				}
 			}

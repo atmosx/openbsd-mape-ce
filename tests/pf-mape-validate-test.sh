@@ -41,11 +41,11 @@ main(void)
 				mape.psidlen = k;
 				mape.psid = psid;
 				valid = a == 0 && k == 0 && psid == 0;
-				if (a >= 1 && a <= 15 && k >= 1 && k <= 16 - a)
+				if (a <= 15 && k >= 1 && k <= 16 - a)
 					valid = psid < (1U << k);
 				assert(pf_mape_validate(&mape) == (valid ? 0 : EINVAL));
 			}
-			if (a >= 1 && a <= 15 && k >= 1 && k <= 16 - a) {
+			if (a <= 15 && k >= 1 && k <= 16 - a) {
 				mape.psid = (1U << k) - 1;
 				assert(pf_mape_validate(&mape) == 0);
 				mape.psid++;
