@@ -149,4 +149,10 @@ for my $case (
 	$actual[$case->[0]] =~ s/\Q$case->[1]\E/$case->[2]/;
 	like(runtime_mismatch(\%plan, @actual), $case->[3], "detect runtime mismatch: $case->[1]");
 }
+my %unshared_plan = (%plan, PSID_LEN => 0, PSID => 0);
+my $unshared_rules = "match out on gif0 inet from any to any nat-to (gif0)\nmatch out on gif0 inet proto tcp flags S/SA scrub (max-mss 1412)\n";
+is(runtime_mismatch(\%unshared_plan, $gif, $wan, $unshared_rules, $route), undef,
+    'unshared PSID_LEN=0 runtime matches unrestricted NAT');
+like(runtime_mismatch(\%unshared_plan, $gif, $wan, $rules, $route), qr/NAT parameters/,
+    'unshared PSID_LEN=0 rejects restricted map-e-portset rule');
 done_testing;
