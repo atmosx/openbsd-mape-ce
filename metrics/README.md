@@ -5,8 +5,9 @@ for an OpenBSD MAP-E CE router.
 
 ## Contents
 
-- `mape-prometheus-metrics`: short-lived root collector that writes
-  `/var/prometheus/textfile/mape.prom` atomically.
+- `mape-prometheus-metrics`: short-lived root collector that parses
+  `/etc/maped.conf` via `maped-config` (literal assignments only, without shell
+  expansion) and writes `/var/prometheus/textfile/mape.prom` atomically.
 - `grafana-map-e-ce-pfctl-dashboard.json`: Grafana dashboard for MAP-E CE,
   `maped`, PF queues, node_exporter textfile freshness, and
   pfctl-compatible metrics.

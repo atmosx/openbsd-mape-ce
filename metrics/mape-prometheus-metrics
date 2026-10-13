@@ -78,8 +78,15 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -r "$CONF" ]; then
-	# shellcheck disable=SC1090
-	. "$CONF"
+	SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+	MAPED_CONFIG="${MAPED_CONFIG:-/usr/local/libexec/maped/maped-config}"
+	if [ ! -x "$MAPED_CONFIG" ] && [ -x "$SCRIPT_DIR/../libexec/maped/maped-config" ]; then
+		MAPED_CONFIG="$SCRIPT_DIR/../libexec/maped/maped-config"
+	elif [ ! -x "$MAPED_CONFIG" ] && [ -x "$SCRIPT_DIR/../maped/maped-config" ]; then
+		MAPED_CONFIG="$SCRIPT_DIR/../maped/maped-config"
+	fi
+	CONFIG_TEXT=$("$MAPED_CONFIG" "$CONF")
+	eval "$CONFIG_TEXT"
 fi
 
 WAN_IF="${WAN_IF:-pppoe0}"
