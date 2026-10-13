@@ -220,6 +220,16 @@ EOF
 	require_line 'mape_config_matches_lease 0' "$out" "live port set differs from lease"
 	require_line 'mape_collection_success{source="pf_anchor"} 1' "$out" "live anchor still collected"
 	ok "live port set mismatch detected"
+
+	bad_conf="$tmp/bad-metrics.conf"
+	printf '%s\n' 'WAN_IF=$(touch "'"$tmp/pwned"'")' > "$bad_conf"
+	if sh "$repo/metrics/mape-prometheus-metrics" -c "$bad_conf" -o "$out" >/dev/null 2>&1; then
+		fail "reject shell command substitution in metrics config"
+	fi
+	if [ -e "$tmp/pwned" ]; then
+		fail "metrics config executed shell command substitution"
+	fi
+	ok "reject shell expansion in metrics config"
 }
 
 run_metrics_with_pfctl_exporter_stubs
