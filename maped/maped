@@ -23,7 +23,7 @@ use Maped qw(command status_text parse_lease complete_lease lease_text derive_ma
 use MapedStatus;
 use MapedPublish;
 use Fcntl qw(:flock);
-use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
 use File::Temp qw(tempfile);
 use File::Path qw(make_path);
 use POSIX qw(setsid strftime);
@@ -36,7 +36,6 @@ getopts("1dfi:l:p", \%opt) or usage();
 my $once = $opt{"1"} ? 1 : 0;
 my $daemon = $opt{d} ? 1 : 0;
 my $foreground = $opt{f} ? 1 : 0;
-my $force_poll = $opt{p} ? 1 : 0;
 my $interval = defined $opt{i} ? $opt{i} : 30;
 my $log_level = lc($opt{l} // "");
 my $conf = $ARGV[0] || "/etc/maped.conf";
@@ -88,7 +87,6 @@ delete $conf{MAPED_DERIVE} unless $custom_derive;
 my %log_rank = (debug => 0, info => 1, warn => 2);
 $log_level = lc($conf{MAPED_LOG_LEVEL} || $conf{MAPE_LOG_LEVEL} || "info") if $log_level eq "";
 usage() unless exists $log_rank{$log_level};
-my $have_kqueue = $force_poll ? 0 : load_kqueue();
 
 make_path($state_dir, {mode => 0700}) unless -d $state_dir;
 my @state_stat = stat($state_dir);
@@ -144,10 +142,10 @@ sub usage {
 }
 
 sub startup_message {
-	my $backend = $have_kqueue && $conf{LEASE_FILE} ?
-	    "kqueue on $conf{LEASE_FILE}; health check every ${interval}s" :
+	my $watch = $conf{LEASE_FILE} ?
+	    "watching $conf{LEASE_FILE}; health check every ${interval}s" :
 	    "polling every ${interval}s";
-	return "started; using $conf (restart to reload); $backend";
+	return "started; using $conf (restart to reload); $watch";
 }
 
 sub daemonize {
@@ -214,7 +212,6 @@ sub sandbox_unveil_rules {
 	    ["/bin/sh", "x"],
 	    [$maped_up, "x"],
 	    [$maped_down, "x"],
-	    [$maped_derive, "x"],
 	    [$route, "x"],
 	    [$ifconfig, "x"],
 	    [$pfctl, "x"],
@@ -222,9 +219,14 @@ sub sandbox_unveil_rules {
 	    [$state_dir, "rwc"],
 	);
 
-	push @rules, [$conf, "r"] if $conf =~ m{^/};
-	push @rules, [dirname($conf{LEASE_FILE}), "r"]
-	    if $conf{LEASE_FILE} && $conf{LEASE_FILE} =~ m{^/};
+	if ($custom_derive) {
+		push @rules, [$^X, "x"] if $^X =~ m{^/} && -e $^X;
+		push @rules, [$maped_derive, "x"] if -e $maped_derive;
+	}
+	if ($conf{LEASE_FILE} && $conf{LEASE_FILE} =~ m{^/}) {
+		my $lease_dir = dirname($conf{LEASE_FILE});
+		push @rules, [$lease_dir, "r"] if -d $lease_dir;
+	}
 
 	return @rules;
 }
@@ -448,19 +450,6 @@ sub runtime_reconfigure_reason {
 	return undef;
 }
 
-sub load_kqueue {
-	my $ok = eval {
-		require IO::KQueue;
-		IO::KQueue->import(qw(
-		    EVFILT_VNODE EV_ADD EV_ENABLE EV_CLEAR
-		    NOTE_WRITE NOTE_DELETE NOTE_EXTEND NOTE_ATTRIB NOTE_RENAME NOTE_REVOKE
-		));
-		1;
-	} ? 1 : 0;
-	log_debug($ok ? "IO::KQueue loaded" : "IO::KQueue unavailable; polling fallback enabled");
-	return $ok;
-}
-
 sub file_id {
 	my ($path) = @_;
 	return undef unless defined $path && $path ne "";
@@ -476,47 +465,23 @@ sub wait_for_change {
 		$wait = $left if $left < $wait;
 		$wait = 1 if $wait < 1;
 	}
-	if ($have_kqueue && $conf{LEASE_FILE} && -r $conf{LEASE_FILE}) {
-		if (wait_for_kqueue_change($conf{LEASE_FILE}, $wait)) {
-			log_debug("kqueue reported lease file event");
+	if (!$conf{LEASE_FILE}) {
+		log_debug("polling sleep for ${wait}s");
+		sleep $wait unless $terminate;
+		return;
+	}
+	my $end = clock_gettime(CLOCK_MONOTONIC) + $wait;
+	while (!$terminate) {
+		my $current_id = file_id($conf{LEASE_FILE});
+		if ((defined $lease_file_id) != (defined $current_id) ||
+		    (defined $lease_file_id && $lease_file_id ne $current_id)) {
+			log_debug("lease file change detected");
 			return;
 		}
-		return if $terminate;
-		log_warn("kqueue watch unavailable; falling back to polling");
+		my $left = $end - clock_gettime(CLOCK_MONOTONIC);
+		last if $left <= 0;
+		sleep($left < 1 ? $left : 1);
 	}
-
-	log_debug("polling sleep for ${interval}s");
-	sleep $wait unless $terminate;
-}
-
-sub wait_for_kqueue_change {
-	my ($path, $wait) = @_;
-	open my $fh, "<", $path or return 0;
-	my @st = stat($fh);
-	my $current_id = @st ? join(":", $st[0], $st[1], $st[9], $st[7]) : undef;
-	if ((defined $lease_file_id) != (defined $current_id) ||
-	    (defined $lease_file_id && $lease_file_id ne $current_id)) {
-		close $fh;
-		return 1;
-	}
-
-	my $kq = eval { IO::KQueue->new() };
-	if (!$kq) {
-		close $fh;
-		return 0;
-	}
-
-	my $flags = &EV_ADD | &EV_ENABLE | &EV_CLEAR;
-	my $notes = &NOTE_WRITE | &NOTE_DELETE | &NOTE_EXTEND | &NOTE_ATTRIB | &NOTE_RENAME | &NOTE_REVOKE;
-	my $ok = eval {
-		$kq->EV_SET(fileno($fh), &EVFILT_VNODE, $flags, $notes, 0, 0);
-		$kq->kevent($wait * 1000);
-		1;
-	} ? 1 : 0;
-	POSIX::close($$kq);
-	close $fh;
-
-	return $ok;
 }
 
 sub read_file {

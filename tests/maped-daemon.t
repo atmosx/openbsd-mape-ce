@@ -173,6 +173,9 @@ is_deeply(status()->{published_endpoints}, [], 'failed candidate not advertised'
 
 writefile("$tmp/up", "#!/bin/sh\necho up >> '$tmp/calls'\n");
 writefile("$tmp/calls", '');
+writefile("$tmp/lease-watch", "initial\n");
+$conf{LEASE_FILE} = "$tmp/lease-watch";
+writefile("$tmp/conf", config_text(\%conf));
 (my $short = $live) =~ s/lease-seconds: 60/lease-seconds: 4/;
 writefile("$tmp/live", $short);
 my $pid = fork();
@@ -180,17 +183,18 @@ die $! unless defined $pid;
 if (!$pid) {
 	open STDOUT, '>', "$tmp/daemon.log" or die $!;
 	open STDERR, '>&', STDOUT or die $!;
-	exec $^X, "$tmp/maped", '-f', '-p', '-i', '1', "$tmp/conf";
+	exec $^X, "$tmp/maped", '-f', '-i', '10', "$tmp/conf";
 	die $!;
 }
 my $end = time() + 3;
 sleep 0.05 while readfile("$tmp/calls") eq '' && time() < $end;
 is(readfile("$tmp/calls"), "up\n", 'continuous daemon configured');
 writefile("$tmp/fail", '');
-sleep 1.2;
+writefile("$tmp/lease-watch", "changed\n");
+sleep 1.3;
 is(readfile("$tmp/calls"), "up\n", 'read failure retains still-valid service');
-is(status()->{status}, 'degraded', 'temporary query failure reported');
-sleep 3.5;
+is(status()->{status}, 'degraded', 'lease-file stat trigger wakes daemon before interval');
+sleep 3.2;
 like(readfile("$tmp/calls"), qr/up\ndown\n/, 'read failure cannot extend confirmed expiry');
 is(status()->{status}, 'inactive', 'expired status invalidated');
 kill 'TERM', $pid;
