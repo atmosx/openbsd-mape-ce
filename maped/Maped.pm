@@ -7,7 +7,7 @@ use Exporter 'import';
 use IO::Select;
 use POSIX qw(WNOHANG setpgid);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
-our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
+our @EXPORT_OK = qw(command status_text parse_lease complete_lease lease_text derive_mape parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 
 sub status_text {
 	my ($rc) = @_;
@@ -138,6 +138,100 @@ sub lease_text {
 	return "ia_pd 0 $addr $plen\nmape_br $l->{BR_IPV6}\nmape_rule " .
 	    join(' ', map { $l->{$_} // 0 } qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)) .
 	    "\nmape_portparams " . join(' ', @$l{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)}) . "\n";
+}
+
+sub derive_mape {
+	my ($lease, $env) = @_;
+	$env ||= {};
+	my $val = sub {
+		my ($key) = @_;
+		return $lease->{$key} if defined $lease->{$key} && $lease->{$key} ne '';
+		return $env->{$key} if defined $env->{$key} && $env->{$key} ne '';
+		die "maped-derive: $key missing\n";
+	};
+	my $pd = $env->{MAPED_SNAPSHOT} ? ($lease->{PD_PREFIX} // '') :
+	    ($env->{PD_PREFIX} || $lease->{PD_PREFIX} || '');
+	die "maped-derive: could not find delegated prefix; set PD_PREFIX=.../... in /etc/maped.conf for testing\n"
+	    unless $pd ne '';
+	my ($pd_addr, $pd_plen) = $pd =~ /^([^\/]+)\/(\d+)$/ or
+	    die "maped-derive: bad PD prefix: $pd\n";
+	my $map6_prefix = $val->('MAP_IPV6_PREFIX');
+	my $map6_plen   = 0 + $val->('MAP_IPV6_PLEN');
+	my $map4_prefix = $val->('MAP_IPV4_PREFIX');
+	my $map4_plen   = 0 + $val->('MAP_IPV4_PLEN');
+	my $ea_len      = 0 + $val->('EA_LEN');
+	my $psid_offset = 0 + $val->('PSID_OFFSET');
+	my $br_ipv6     = $lease->{BR_IPV6} // $env->{BR_IPV6};
+
+	my $v4_suffix_len = 32 - $map4_plen;
+	my $psid_len = $ea_len - $v4_suffix_len;
+	die "maped-derive: invalid MAP rule: EA_LEN too small\n" if $psid_len < 0;
+	# The PD must provide the IPv4 suffix. Some providers delegate only those EA
+	# bits and supply the remaining PSID explicitly in PORTPARAMS (e.g. /56 PD,
+	# /48 rule, 16 EA bits). The lower 64 bits hold the IPv4 address and PSID.
+	die "maped-derive: delegated prefix does not contain the MAP IPv4 suffix\n"
+	    if $pd_plen < $map6_plen + $v4_suffix_len;
+	die "maped-derive: MAP EA bits overlap the CE interface identifier\n"
+	    if $map6_plen + $ea_len > 64;
+
+	my $pd_packed = inet_pton(AF_INET6, $pd_addr) or
+	    die "maped-derive: invalid IPv6 address: $pd_addr\n";
+	my $rule6_packed = inet_pton(AF_INET6, $map6_prefix) or
+	    die "maped-derive: invalid IPv6 address: $map6_prefix\n";
+	my $map4_packed = inet_pton(AF_INET, $map4_prefix) or
+	    die "maped-derive: invalid IPv4 address: $map4_prefix\n";
+
+	my $pd_bits = substr(unpack('B128', $pd_packed), 0, $pd_plen) . ('0' x (128 - $pd_plen));
+	my $rule6_bits = substr(unpack('B128', $rule6_packed), 0, $map6_plen);
+	if (substr($pd_bits, 0, $map6_plen) ne $rule6_bits) {
+		die "maped-derive: delegated prefix $pd is not inside MAP rule $map6_prefix/$map6_plen\n";
+	}
+
+	my $ea_bits = substr($pd_bits, $map6_plen, $ea_len);
+	my $v4_suffix = $v4_suffix_len ? unpack('N', pack('B32', ('0' x (32 - $v4_suffix_len)) . substr($ea_bits, 0, $v4_suffix_len))) : 0;
+	my $psid = $psid_len ? unpack('N', pack('B32', ('0' x (32 - $psid_len)) . substr($ea_bits, $v4_suffix_len, $psid_len))) : 0;
+
+	my $dhcp_psid_len = $lease->{DHCP_PSID_LEN} // $env->{DHCP_PSID_LEN} // 0;
+	my $dhcp_psid = $lease->{DHCP_PSID} // $env->{DHCP_PSID};
+	my $nat_psid_len = $dhcp_psid_len > 0 ? 0 + $dhcp_psid_len : $psid_len;
+	my $nat_psid = ($dhcp_psid_len > 0 && defined $dhcp_psid) ? 0 + $dhcp_psid : $psid;
+
+	if ($pd_plen < $map6_plen + $ea_len) {
+		die "maped-derive: delegated prefix omits PSID bits without full PORTPARAMS\n"
+		    if !$dhcp_psid_len || $dhcp_psid_len != $psid_len;
+		# PSID bits actually present in the PD must agree with PORTPARAMS.
+		my $known = $pd_plen - $map6_plen - $v4_suffix_len;
+		die "maped-derive: PORTPARAMS PSID conflicts with delegated prefix\n"
+		    if $known && ($nat_psid >> ($psid_len - $known)) != ($psid >> ($psid_len - $known));
+		$psid = $nat_psid;
+	} elsif ($dhcp_psid_len && ($dhcp_psid_len != $psid_len || $nat_psid != $psid)) {
+		die "maped-derive: PORTPARAMS PSID conflicts with MAP EA bits\n";
+	}
+
+	my $map4_int = (unpack('N', $map4_packed) & ($map4_plen ? (0xffffffff << (32 - $map4_plen)) : 0)) | $v4_suffix;
+	my $map4_bin = pack('N', $map4_int);
+	my $map4_addr = inet_ntop(AF_INET, $map4_bin);
+
+	my $ce_bits = substr($pd_bits, 0, 64) . ('0' x 16) . unpack('B32', $map4_bin) . unpack('B16', pack('n', $psid));
+	my $ce_ipv6 = inet_ntop(AF_INET6, pack('B128', $ce_bits));
+
+	my %derived = (
+		PD_PREFIX       => $pd,
+		MAP_IPV6_PREFIX => $map6_prefix,
+		MAP_IPV6_PLEN   => $map6_plen,
+		MAP_IPV4_PREFIX => $map4_prefix,
+		MAP_IPV4_PLEN   => $map4_plen,
+		EA_LEN          => $ea_len,
+		CE_IPV6         => $ce_ipv6,
+		MAPE_IPV4       => $map4_addr,
+		EA_PSID_LEN     => $psid_len,
+		EA_PSID         => $psid,
+		PSID_LEN        => $nat_psid_len,
+		PSID            => $nat_psid,
+		PSID_OFFSET     => $psid_offset,
+	);
+	$derived{BR_IPV6} = $br_ipv6 if defined $br_ipv6 && $br_ipv6 ne '';
+	return %derived;
 }
 
 # A deliberately small shell-compatible language: literal assignments only.
