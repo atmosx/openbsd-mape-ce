@@ -101,11 +101,17 @@ mkdir -p "$(dirname "$PF_ANCHOR_FILE")"
 PF_ANCHOR_TMP="$(mktemp "$PF_ANCHOR_FILE.XXXXXXXXXX")"
 trap 'rm -f "$PF_ANCHOR_TMP"' EXIT
 
+if [ "${PSID_LEN:-0}" -gt 0 ]; then
+	NAT_PORTSET=" map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID"
+else
+	NAT_PORTSET=""
+fi
+
 cat > "$PF_ANCHOR_TMP" <<EOF
 match out on $GIF_IF inet proto tcp flags S/SA scrub (max-mss $TCP_MSS)
 
-match out on $GIF_IF inet from ($GIF_IF) to any nat-to ($GIF_IF) map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID
-match out on $GIF_IF inet from $LAN_NET to any nat-to ($GIF_IF) map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID
+match out on $GIF_IF inet from ($GIF_IF) to any nat-to ($GIF_IF)$NAT_PORTSET
+match out on $GIF_IF inet from $LAN_NET to any nat-to ($GIF_IF)$NAT_PORTSET
 
 pass out quick on $WAN_IF inet6 proto 4 from $CE_IPV6 to $BR_IPV6 keep state
 pass in  quick on $WAN_IF inet6 proto 4 from $BR_IPV6 to $CE_IPV6 keep state

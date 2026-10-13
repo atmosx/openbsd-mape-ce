@@ -236,14 +236,25 @@ sub runtime_mismatch {
 	my $peer = $plan->{MAPED_PEER_IPV4} || '0.0.0.1';
 	return 'tunnel IPv4 address differs' unless $gif =~ /\binet \Q$plan->{MAPE_IPV4}\E --> \Q$peer\E\s/;
 	return 'CE alias is missing' unless has_ipv6($wan, $plan->{CE_IPV6});
-	my $portset = join '/', @$plan{qw(PSID_OFFSET PSID_LEN PSID)};
-	my @nat = grep { /\bmap-e-portset\b/ } split /\n/, $rules;
-	return 'MAP-E NAT rules are missing' unless @nat;
-	for my $rule (@nat) {
-		return 'MAP-E NAT parameters differ' unless
-		    $rule =~ /\bon \Q$plan->{GIF_IF}\E\s/ &&
-		    $rule =~ /\bnat-to \(\Q$plan->{GIF_IF}\E\)/ &&
-		    $rule =~ /\bmap-e-portset \Q$portset\E(?:\s|$)/;
+	if ($plan->{PSID_LEN}) {
+		my $portset = join '/', @$plan{qw(PSID_OFFSET PSID_LEN PSID)};
+		my @nat = grep { /\bmap-e-portset\b/ } split /\n/, $rules;
+		return 'MAP-E NAT rules are missing' unless @nat;
+		for my $rule (@nat) {
+			return 'MAP-E NAT parameters differ' unless
+			    $rule =~ /\bon \Q$plan->{GIF_IF}\E\s/ &&
+			    $rule =~ /\bnat-to \(\Q$plan->{GIF_IF}\E\)/ &&
+			    $rule =~ /\bmap-e-portset \Q$portset\E(?:\s|$)/;
+		}
+	} else {
+		my @nat = grep { /\bnat-to\b/ } split /\n/, $rules;
+		return 'MAP-E NAT rules are missing' unless @nat;
+		for my $rule (@nat) {
+			return 'MAP-E NAT parameters differ' if
+			    $rule !~ /\bon \Q$plan->{GIF_IF}\E\s/ ||
+			    $rule !~ /\bnat-to \(\Q$plan->{GIF_IF}\E\)/ ||
+			    $rule =~ /\bmap-e-portset\b/;
+		}
 	}
 	my $mss = $plan->{GIF_MTU} - 40;
 	return 'TCP MSS clamp differs' unless $rules =~ /^.*\bon \Q$plan->{GIF_IF}\E\s.*\bmax-mss $mss\)/m;

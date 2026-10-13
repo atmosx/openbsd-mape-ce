@@ -37,6 +37,13 @@ to configure the
 interface,
 .Xr pf 4
 anchor, and IPv4 default route.
+Shared IPv4 allocations emit
+.Cm map-e-portset
+NAT rules, while unshared 1:1 IPv4 allocations
+.Pq Va PSID_LEN Cm 0
+emit unrestricted
+.Cm nat-to
+rules.
 .Pp
 The helper programs are installed under
 .Pa /usr/local/libexec/maped
