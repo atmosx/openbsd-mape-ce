@@ -7,8 +7,11 @@ use POSIX qw(strftime);
 use File::Temp qw(tempfile);
 
 sub new {
-	my ($class, $path) = @_;
-	my $self = bless {path => $path, record => [], publish_events => [], published => []}, $class;
+	my ($class, $path, %opts) = @_;
+	my $max = $opts{max_history};
+	die "invalid max_history\n" if defined $max && ($max !~ /^\d+$/ || $max < 1);
+	my $self = bless {path => $path, max_history => $max,
+	    record => [], publish_events => [], published => []}, $class;
 	if (-e $path) {
 		open my $fh, '<', $path or die "status open: $!";
 		local $/;
@@ -101,6 +104,9 @@ sub publish {
 				push @$records, {allocation => $allocation,
 				    'first-seen' => stamp($now), 'last-seen' => stamp($now)};
 			}
+			if (defined $self->{max_history} && @$records > $self->{max_history}) {
+				splice @$records, 0, @$records - $self->{max_history};
+			}
 		}
 	}
 	$doc->{record} = $records;
@@ -112,6 +118,9 @@ sub publish {
 	    $json->encode($published) ne $json->encode($endpoints)) {
 		push @events, {at => stamp($now), status => $args{status}, endpoints => $endpoints};
 		$published = $endpoints;
+		if (defined $self->{max_history} && @events > $self->{max_history}) {
+			splice @events, 0, @events - $self->{max_history};
+		}
 	}
 	$doc->{publish_events} = \@events;
 	(my $dir = $self->{path}) =~ s{/[^/]+$}{};
