@@ -17,13 +17,12 @@ been publicly available since 2021 and adds MAP-E port-set translation to
 the `gif(4)` tunnel interface, `pf(4)` anchor, and IPv4 default route from the
 live `dhcp6leased(8)` lease.
 
-Base OpenBSD provides `OpenBSD::Pledge` and `OpenBSD::Unveil`, which `maped(8)`
-requires on OpenBSD. Install `git` and the optional `p5-IO-KQueue` package
-(without `p5-IO-KQueue`, `maped(8)` falls back to polling), and create the
-tunnel interface:
+Base OpenBSD provides `OpenBSD::Pledge`, `OpenBSD::Unveil`, and `JSON::PP`, so
+`maped(8)` requires no third-party packages at runtime. Install `git` to clone
+this repository and create the tunnel interface:
 
 ```ksh
-doas pkg_add git p5-IO-KQueue
+doas pkg_add git
 printf 'create\nup\n' | doas tee /etc/hostname.gif0 >/dev/null
 ```
 
@@ -156,7 +155,7 @@ Inspect `/var/log/daemon`:
 ```text
 grep maped /var/log/daemon
 
-Oct  3 00:35:10 hermes maped[27676]: started; using /etc/maped.conf (restart to reload); kqueue on /var/db/dhcp6leased/pppoe0; health check every 30s
+Oct  3 00:35:10 hermes maped[27676]: started; using /etc/maped.conf (restart to reload); watching /var/db/dhcp6leased/pppoe0; health check every 30s
 Oct  3 00:35:10 hermes maped[27676]: applying current MAP-E provisioning
 Oct  3 00:35:11 hermes maped[27676]: MAP-E reconfiguration complete
 Oct  3 00:35:41 hermes maped[27676]: applying current MAP-E provisioning

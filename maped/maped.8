@@ -70,8 +70,9 @@ and
 The default is
 .Cm info .
 .It Fl p
-Force polling instead of
-.Xr kqueue 2 .
+Accepted for backward compatibility;
+.Nm
+always uses base Perl without external event packages.
 .El
 .Pp
 If
@@ -339,7 +340,6 @@ Atomic JSON status and persistent allocation history (mode 0600).
 .Ex -std maped
 .Sh SEE ALSO
 .Xr sh 1 ,
-.Xr kqueue 2 ,
 .Xr pledge 2 ,
 .Xr unveil 2 ,
 .Xr gif 4 ,
