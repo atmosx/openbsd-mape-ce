@@ -19,7 +19,7 @@ use warnings;
 use Getopt::Std;
 use FindBin;
 use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
-use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
+use Maped qw(command status_text parse_lease complete_lease lease_text derive_mape parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 use MapedStatus;
 use MapedPublish;
 use Fcntl qw(:flock);
@@ -65,8 +65,14 @@ my $ifconfig = resolve_command($conf{IFCONFIG} || "ifconfig", "/sbin/ifconfig");
 my $pfctl = resolve_command($conf{PFCTL} || "pfctl", "/sbin/pfctl");
 my $maped_down = resolve_command($conf{MAPED_DOWN} || "/usr/local/libexec/maped/maped-down",
     "/usr/local/libexec/maped/maped-down");
-my $maped_derive = resolve_command($conf{MAPED_DERIVE} || "/usr/local/libexec/maped/maped-derive",
-    "/usr/local/libexec/maped/maped-derive");
+my $default_derive = resolve_command("/usr/local/libexec/maped/maped-derive",
+    "$FindBin::Bin/maped-derive");
+my $maped_derive = $conf{MAPED_DERIVE} ?
+    resolve_command($conf{MAPED_DERIVE}, $default_derive) : $default_derive;
+my $custom_derive = ($conf{MAPED_DERIVE} &&
+    $conf{MAPED_DERIVE} ne "/usr/local/libexec/maped/maped-derive" &&
+    (Cwd::abs_path($maped_derive) // $maped_derive) ne
+    (Cwd::abs_path("$FindBin::Bin/maped-derive") // "$FindBin::Bin/maped-derive")) ? 1 : 0;
 my $route = resolve_command($conf{ROUTE} || "route", "/sbin/route");
 my $applied_file = "$state_dir/applied.conf";
 my $lease_deadline;
@@ -75,7 +81,8 @@ my ($report_status, $report_reason) = ('initializing', 'awaiting live confirmati
 $conf{IFCONFIG} = $ifconfig;
 $conf{PFCTL} = $pfctl;
 $conf{ROUTE} = $route;
-$conf{MAPED_DERIVE} = $maped_derive;
+$conf{MAPED_DERIVE} = $maped_derive if $custom_derive;
+delete $conf{MAPED_DERIVE} unless $custom_derive;
 my %log_rank = (debug => 0, info => 1, warn => 2);
 $log_level = lc($conf{MAPED_LOG_LEVEL} || $conf{MAPE_LOG_LEVEL} || "info") if $log_level eq "";
 usage() unless exists $log_rank{$log_level};
@@ -314,24 +321,29 @@ sub run_once {
 	$expires_at = time + ($lease_deadline - clock_gettime(CLOCK_MONOTONIC));
 	return withdraw('lease expired during query') if clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline;
 	my $snapshot = lease_text($lease);
-	my ($fh, $path) = tempfile("lease.XXXXXXXX", DIR => $state_dir);
-	print {$fh} $snapshot or die "maped: snapshot write: $!";
-	close $fh or die "maped: snapshot close: $!";
-	my ($rc, $out);
-	{
-		local %ENV = (%ENV, %conf, MAPED_SNAPSHOT => $path);
-		($rc, $out) = run_command($maped_derive);
-	}
-	if ($rc) {
+	my %derived;
+	if ($custom_derive) {
+		my ($fh, $path) = tempfile("lease.XXXXXXXX", DIR => $state_dir);
+		print {$fh} $snapshot or die "maped: snapshot write: $!";
+		close $fh or die "maped: snapshot close: $!";
+		my ($rc, $out);
+		{
+			local %ENV = (%ENV, %conf, MAPED_SNAPSHOT => $path);
+			($rc, $out) = run_command($maped_derive);
+		}
 		unlink $path;
-		log_warn("derivation failed: " . status_text($rc) . ": $out");
-		withdraw('new provisioning cannot be applied');
-		return 0;
+		if ($rc) {
+			log_warn("derivation failed: " . status_text($rc) . ": $out");
+			withdraw('new provisioning cannot be applied');
+			return 0;
+		}
+		%derived = eval { parse_config($out) };
+	} else {
+		%derived = eval { derive_mape($lease, \%conf) };
 	}
-	my %derived = eval { parse_config($out) };
 	if ($@ || !defined $derived{CE_IPV6} || !defined $derived{MAPE_IPV4}) {
-		unlink $path;
-		log_warn('invalid derivation output');
+		chomp(my $err = $@ || 'invalid derivation output');
+		log_warn("derivation failed: $err");
 		withdraw('new provisioning cannot be derived');
 		return 0;
 	}
@@ -340,7 +352,6 @@ sub run_once {
 	my $assigned = eval { MapedPublish::assign($publish_services, \%plan,
 	    $reporter->publish_preferences()) };
 	if ($@) {
-		unlink $path;
 		log_warn("publishing rejected: $@");
 		withdraw('publishing candidate cannot be assigned');
 		return 0;
@@ -349,27 +360,25 @@ sub run_once {
 	# Retire old ownership before changing a prefix, BR, or interface.
 	if (%previous && grep { ($previous{$_} // '') ne ($plan{$_} // '') }
 	    qw(CE_IPV6 BR_IPV6 MAPE_IPV4 WAN_IF GIF_IF PSID_OFFSET PSID_LEN PSID)) {
-		if (!withdraw('provisioning changed')) { unlink $path; return 0; }
+		if (!withdraw('provisioning changed')) { return 0; }
 		$lease_deadline = $started + $seconds;
 		$expires_at = time + ($lease_deadline - clock_gettime(CLOCK_MONOTONIC));
 		%previous = ();
 	}
 	my ($wan_rc, $wan) = run_command($ifconfig, $conf{WAN_IF});
-	if ($wan_rc) { unlink $path; log_warn("cannot inspect WAN: $wan"); return 0; }
+	if ($wan_rc) { log_warn("cannot inspect WAN: $wan"); return 0; }
 	$plan{MAPED_ALIAS_OWNED} = ($previous{MAPED_ALIAS_OWNED} ||
 	    !has_ipv6($wan, $plan{CE_IPV6})) ? 1 : 0;
 	$plan{GIF_MTU} = eval { effective_mtu($conf{GIF_MTU}, $wan) };
-	if ($@) { unlink $path; log_warn($@); return 0; }
+	if ($@) { log_warn($@); return 0; }
 	my $runtime_reason = runtime_reconfigure_reason(\%plan, $wan);
 	if (defined $runtime_reason && $runtime_reason =~ /^cannot /) {
-		unlink $path;
 		log_warn("runtime health check failed: $runtime_reason");
 		return 0;
 	}
 	my $old = read_state();
 	my $desired = config_text(\%plan) . $snapshot;
 	if (defined $old && $old eq $desired && !defined $runtime_reason && %previous) {
-		unlink $path;
 		report_active(\%plan);
 		return 1;
 	}
@@ -382,9 +391,12 @@ sub run_once {
 	publish_status();
 	# Record ownership before mutations, so partial failures can be retired.
 	atomic_write($applied_file, config_text(\%plan));
+	my ($fh, $path) = tempfile("lease.XXXXXXXX", DIR => $state_dir);
+	print {$fh} $snapshot or die "maped: snapshot write: $!";
+	close $fh or die "maped: snapshot close: $!";
 	my $budget = $lease_deadline - clock_gettime(CLOCK_MONOTONIC);
 	if ($budget <= 0) { unlink $path; return withdraw('lease expired before apply'); }
-	($rc, $out) = command($budget < 30 ? $budget : 30, 1024 * 1024,
+	my ($rc, $out) = command($budget < 30 ? $budget : 30, 1024 * 1024,
 	    $maped_up, $applied_file, $path);
 	unlink $path;
 	if ($rc || clock_gettime(CLOCK_MONOTONIC) >= $lease_deadline) {

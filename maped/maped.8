@@ -145,7 +145,12 @@ Runtime configuration helper.
 .It Va MAPED_DOWN
 Ownership-aware withdrawal helper.
 .It Va MAPED_DERIVE
-MAP-E parameter derivation helper.
+Optional override for the MAP-E parameter derivation helper.
+When unset or set to the default helper path,
+.Nm
+derives parameters directly in-process and passes the derived values to
+.Pa maped-up
+without spawning a separate derivation process.
 .It Va MAPED_STATE_DIR
 Directory used for daemon state.
 .It Va MAPED_PEER_IPV4
