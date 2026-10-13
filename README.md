@@ -9,6 +9,77 @@ Address and Port with Encapsulation (MAP-E CE,
 
 This is an experimental project.
 
+## How it works
+
+MAP-E ([RFC 7597](https://datatracker.ietf.org/doc/html/rfc7597)) carries IPv4
+traffic across an IPv6-only ISP network by encapsulating IPv4 packets inside
+IPv6 (`ip4-in-ip6`, protocol 4) and sharing a public IPv4 address across
+multiple Customer Edge (CE) routers using deterministic port sets (PSID).
+
+```text
+                       CONTROL PLANE (DHCPv6 Softwire46)
+
+  ISP DHCPv6 Server
+         |
+         |  IA_PD prefix + Option 94 (S46_CONT_MAPE: BR, BMR, PORTPARAMS)
+         v
+  +------------------+    dhcp6leasectl -l -m     +------------------+
+  |  dhcp6leased(8)  | -------------------------> |     maped(8)     |
+  +------------------+   (& LEASE_FILE trigger)   +------------------+
+                                                           |
+                     derives CE IPv6, shared IPv4,         | configures via
+                     PSID port set, and GIF MTU            | maped-up
+                                                           v
+                 +---------------------------------------------------+
+                 |  1. WAN IPv6 alias (CE_IPV6/128 on pppoe0)        |
+                 |  2. gif(4) tunnel (CE_IPV6 <--> BR_IPV6)          |
+                 |  3. pf(4) "mape" anchor (map-e-portset, max-mss)  |
+                 |  4. IPv4 default route (-> gif0)                  |
+                 +---------------------------------------------------+
+
+
+                         DATA PLANE (Packet Encapsulation)
+
+  +------------+      IPv4       +-----------------------------------+
+  | LAN Client | --------------> | OpenBSD CE Router                 |
+  | 192.168.x  |  src :ephemeral |                                   |
+  +------------+                 |  pf(4) nat-to (gif0)              |
+                                 |  map-e-portset offset/len/psid    |
+                                 |    -> rewrites IPv4 src to        |
+                                 |       MAPE_IPV4 : permitted_port  |
+                                 |                                   |
+                                 |  gif(4) encapsulates in IPv6      |
+                                 |    -> outer src: CE_IPV6          |
+                                 |    -> outer dst: BR_IPV6          |
+                                 +-----------------+-----------------+
+                                                   |
+                                                   | IPv4-in-IPv6 (proto 4)
+                                                   | over WAN (pppoe0)
+                                                   v
+                                 +-----------------------------------+
+                                 | ISP MAP Border Relay (BR)         |
+                                 |  - Decapsulates outer IPv6 header |
+                                 |  - Forwards inner IPv4 packet     |
+                                 |  - Routes return IPv4 traffic by  |
+                                 |    dst IPv4 + dst port (PSID)     |
+                                 +-----------------+-----------------+
+                                                   |
+                                                   | Native IPv4
+                                                   v
+                                           IPv4 Internet
+```
+
+### Provisioning and tunneling lifecycle
+
+| Step | Component | Action | Output / State |
+| :--- | :--- | :--- | :--- |
+| **1. DHCPv6 request** | `dhcp6leased(8)` | Sends DHCPv6 Solicit/Request/Renew with `DHO_ORO` requesting Option 94 (`DHO_S46_CONT_MAPE`) when `request mape on <if>` is set in `dhcp6leased.conf(5)`. | Receives `IA_PD` delegated prefix and validated S46 BR, BMR rule, and optional port parameters; updates `/var/db/dhcp6leased/<if>`. |
+| **2. Lease confirmation** | `maped(8)` | Detects a lease-file change or periodic health-check timer and queries `dhcp6leasectl -l -m <if>` over `/dev/dhcp6leased.sock`. | Confirms live `Bound`/`Renewing`/`Rebinding` state and establishes a monotonic expiry deadline from `lease-seconds:`. |
+| **3. Parameter derivation** | `Maped.pm` (`derive_mape`) | Matches the delegated IPv6 prefix against the longest matching Basic Mapping Rule (BMR) and extracts the Embedded Address (EA) bits. | Computes `MAPE_IPV4`, `CE_IPV6` (`/64` prefix + `0000` + IPv4 hex + PSID hex), `BR_IPV6`, `PSID_OFFSET`, `PSID_LEN`, `PSID`, and `GIF_MTU` (`WAN_IF` MTU minus 40). |
+| **4. Ownership & tunnel setup** | `maped-up` | Records ownership in `/var/db/maped/applied.conf`, adds `CE_IPV6/128` alias on `WAN_IF`, and configures `gif(4)` with outer IPv6 endpoints (`CE_IPV6` -> `BR_IPV6`) and inner IPv4 address (`MAPE_IPV4` -> `0.0.0.1`). | `gif0` is `UP` with the derived MTU (e.g., 1452 on a 1492-byte PPPoE link). |
+| **5. PF anchor & routing** | `maped-up` & `pfctl(8)` | Validates and loads the `mape` `pf(4)` anchor: TCP SYN MSS clamping (`GIF_MTU - 40`), `nat-to ($GIF_IF) map-e-portset`, IPv6 proto-4 tunnel admission, and optional `rdr-to` inbound publishing rules; installs the IPv4 default route via `gif0`. | Outbound LAN and router IPv4 traffic is source-NATed into the assigned PSID port set, encapsulated in IPv6 by `gif(4)`, and sent to the Border Relay. |
+| **6. Health & withdrawal** | `maped(8)` & `maped-down` | Reconciles live kernel state (`ifconfig(8)`, `pfctl(8)`, `route(8)`) every 30s, atomically updates `/var/db/maped/status.json`, and tears down owned resources via `maped-down` if the lease is withdrawn or expires. | Self-heals configuration drift and prevents stale routes or unauthorized tunnels from persisting after lease expiry. |
+
 ## 1. Prepare the system
 
 The [`pf(4)` MAP-E patch](https://github.com/toru-mano/openbsd-pf-map-e-ce) has
