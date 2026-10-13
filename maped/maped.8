@@ -12,7 +12,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd May 16, 2026
+.Dd $Mdocdate: May 16 2026 $
 .Dt MAPED 8
 .Os
 .Sh NAME
@@ -26,7 +26,7 @@
 .Op Ar config
 .Sh DESCRIPTION
 .Nm
-watches DHCPv6 MAP-E lease state and configures the local Customer Edge
+monitors DHCPv6 MAP-E lease state and configures the local Customer Edge
 runtime.
 When lease data changes, or when the configured runtime state differs,
 .Nm
@@ -47,26 +47,28 @@ rules.
 .Pp
 The helper programs are installed under
 .Pa /usr/local/libexec/maped
-and are not intended as the primary user interface.
+and are not intended to be run directly.
 .Pp
 The options are as follows:
 .Bl -tag -width Ds
 .It Fl 1
-Run once and exit nonzero if provisioning or configuration fails.
+Run once and exit non-zero if provisioning or configuration fails.
 .It Fl d
-Run as a daemon.
+Daemonize.
 .It Fl f
-Run in the foreground.
+Run in the foreground and log to standard output.
 .It Fl i Ar seconds
 Set the polling or health-check interval.
 The default is 30 seconds.
 .It Fl l Ar level
-Set the log level.
-Valid values are
+Set the logging level.
+Valid levels are
 .Cm debug ,
 .Cm info ,
 and
 .Cm warn .
+The default is
+.Cm info .
 .It Fl p
 Force polling instead of
 .Xr kqueue 2 .
@@ -87,11 +89,11 @@ Values may be unquoted, single-quoted, or double-quoted.
 Comments outside quotes are supported.
 Variable expansion, command substitution, escapes, and shell commands
 are rejected; use explicit values instead.
-Restart the daemon after editing configuration.
+Restart the daemon after editing the configuration.
 It passes a frozen, safely quoted configuration to each helper,
 so an edit cannot change only half of an operation.
-The following variables are commonly set:
-.Bl -tag -width PF_ANCHOR_FILE
+The following variables can be set:
+.Bl -tag -width MAPED_PUBLISH_FILE
 .It Va WAN_IF
 IPv6 WAN interface.
 .It Va LEASE_IF
@@ -118,7 +120,7 @@ The result must be in the
 .Xr gif 4
 range 1280 through 8192; otherwise the helper fails before changing interfaces.
 The generated anchor clamps IPv4 TCP MSS to this MTU minus 40.
-For a PPPoE MTU of 1492, these values are 1452 and 1412 respectively.
+For a PPPoE MTU of 1492, these values are 1452 and 1412, respectively.
 This is initial interface sizing, not tunnel path MTU discovery.
 Health checks recompute it when the WAN MTU changes.
 This does not discover smaller downstream links.
@@ -131,7 +133,8 @@ The daemon queries current
 state with
 .Fl l Fl m
 and requires an exact remaining lifetime.
-Install the matching patched control utility before upgrading maped.
+Install the matching patched control utility before upgrading
+.Nm .
 .It Va PF_ANCHOR_FILE
 Path used to store the generated
 .Xr pf 4
@@ -139,7 +142,9 @@ anchor.
 .It Va MAPED_PUBLISH_FILE
 Optional JSON service file, read at startup.
 Publishing is disabled when unset.
-Restart after editing this file.
+Restart
+.Nm
+after editing this file.
 .It Va MAPED_UP
 Runtime configuration helper.
 .It Va MAPED_DOWN
@@ -166,7 +171,7 @@ Peer address used on the
 .Xr gif 4
 interface.
 .It Va MAPED_LOG_LEVEL
-Log level for
+Logging level for
 .Nm .
 .El
 .Pp
@@ -175,12 +180,23 @@ A temporary control-query failure retains service only until the last
 confirmed monotonic deadline.
 After restart, a failed query retires previously recorded ownership because
 there is no in-memory proof that the old lease remains valid.
-The state directory must be owned by root and not writable by other users.
+The state directory must be owned by
+.Li root
+and not writable by group or other.
 Only one daemon may own it at a time.
-Reserve the configured GIF interface and the mape PF anchor for this daemon.
+Reserve the configured
+.Xr gif 4
+interface and the
+.Dq mape
+.Xr pf 4
+anchor for this daemon.
 Cleanup deletes the default route only when it still belongs to the recorded
-tunnel, and removes the CE alias only when maped originally added it.
-Legacy lease.state files alone are not ownership records.
+tunnel, and removes the CE alias only when
+.Nm
+originally added it.
+Legacy
+.Pa lease.state
+files alone are not ownership records.
 .Sh INBOUND PUBLISHING
 The optional publishing JSON object contains a
 .Cm services
@@ -189,17 +205,25 @@ Each entry requires a unique
 .Cm name ,
 a
 .Cm protocol
-of tcp or udp,
+of
+.Cm tcp
+or
+.Cm udp ,
+a
 .Cm target_address
-of 127.0.0.1, and a
+of
+.Li 127.0.0.1 ,
+and a
 .Cm target_port
 from 1 through 65535.
 An optional
 .Cm source_table
-names an administrator-managed PF table without angle brackets.
+names an administrator-managed
+.Xr pf 4
+table without angle brackets.
 Without a table, the rule permits any source.
-Names start with a letter and contain at most 48 letters, digits, underscores
-or hyphens; table names contain at most 31 letters, digits or underscores and
+Names start with a letter and contain at most 48 letters, digits, underscores,
+or hyphens; table names contain at most 31 letters, digits, or underscores and
 must not start with a digit.
 Invalid or unreadable configured files stop startup.
 .Pp
@@ -209,14 +233,21 @@ separately for TCP and UDP.
 Saved assignments never authorize an allocation.
 Insufficient ports reject the whole candidate, not just individual services.
 .Pp
-The complete mape anchor is validated and loaded with generated
+The complete
+.Dq mape
+anchor is validated and loaded with generated
 .Cm pass in quick
 redirects to the loopback targets.
 The administrator must position the parent anchor, manage source tables,
 and remove competing manual rules.
-Earlier block quick rules can prevent matching.
-No parent ruleset is modified and PF is never disabled.
-Unchanged healthy renewals avoid reloading PF.
+Earlier
+.Cm block quick
+rules can prevent matching.
+No parent ruleset is modified and
+.Xr pf 4
+is never disabled.
+Unchanged healthy renewals avoid reloading
+.Xr pf 4 .
 Lease withdrawal or expiry removes the owned rules.
 Publishing does not reserve ports against outbound NAT, check listeners,
 or prove ISP reachability.
@@ -226,11 +257,14 @@ atomically publishes
 .Pa status.json
 in
 .Va MAPED_STATE_DIR
-(default
-.Pa /var/db/maped )
+.Pq default Pa /var/db/maped
 on each reconciliation cycle and during application and withdrawal.
-The file uses base Perl's JSON::PP and requires no additional packages.
-It is root-readable and is not used to authorize service or establish ownership.
+The file uses base Perl's
+.Li JSON::PP
+and requires no additional packages.
+It is readable only by
+.Li root
+and is not used to authorize service or establish ownership.
 .Pp
 Schema version 1 includes a UTC
 .Cm last-update
@@ -259,49 +293,95 @@ Invalid history stops startup rather than silently discarding records.
 The
 .Cm published_endpoints
 array lists successfully applied inbound services and their external address
-and port, protocol, loopback target and optional source table.
+and port, protocol, loopback target, and optional source table.
 It is empty outside active or temporarily degraded service.
 The persistent
 .Cm publish_events
 array records endpoint changes with UTC
 .Cm at
-timestamps, reporting status and the complete endpoint list.
+timestamps, reporting status, and the complete endpoint list.
 An empty endpoint list records withdrawal or loss of confirmed configuration;
 a failed cleanup does not prove kernel removal.
 Neither in-progress nor failed candidates are advertised.
 .Sh FILES
-.Bl -tag -width /usr/local/libexec/maped/maped-derive -compact
+.Bl -tag -width /usr/local/libexec/maped/maped-publish -compact
 .It Pa /etc/maped.conf
-Configuration file.
-.It Pa /etc/rc.d/maped
-Daemon control script.
-.It Pa /usr/local/sbin/maped
-Daemon.
-.It Pa /usr/local/libexec/maped/maped-up
-Runtime configuration helper.
-.It Pa /usr/local/libexec/maped/maped-down
-Runtime teardown helper.
-.It Pa /usr/local/libexec/maped/maped-derive
-MAP-E parameter derivation helper.
-.It Pa /usr/local/libexec/maped/maped-publish
-Internal validated-candidate PF rule renderer.
-.It Pa /var/db/maped/status.json
-Atomic JSON status and persistent allocation history (mode 0600).
-.It Pa /var/db/maped/lease.state
-Default lease state cache.
+Default
+.Nm
+configuration file.
 .It Pa /etc/pf.anchors/mape
 Default generated
 .Xr pf 4
 anchor file.
+.It Pa /etc/rc.d/maped
+.Xr rc.d 8
+control script.
+.It Pa /usr/local/libexec/maped/maped-derive
+MAP-E parameter derivation helper.
+.It Pa /usr/local/libexec/maped/maped-down
+Runtime teardown helper.
+.It Pa /usr/local/libexec/maped/maped-publish
+Internal validated-candidate
+.Xr pf 4
+rule renderer.
+.It Pa /usr/local/libexec/maped/maped-up
+Runtime configuration helper.
+.It Pa /usr/local/sbin/maped
+Daemon executable.
+.It Pa /var/db/maped/applied.conf
+Recorded ownership state for active resources.
+.It Pa /var/db/maped/lease.state
+Default lease state cache.
+.It Pa /var/db/maped/status.json
+Atomic JSON status and persistent allocation history (mode 0600).
 .El
+.Sh EXIT STATUS
+.Ex -std maped
 .Sh SEE ALSO
 .Xr sh 1 ,
+.Xr kqueue 2 ,
+.Xr pledge 2 ,
+.Xr unveil 2 ,
 .Xr gif 4 ,
 .Xr pf 4 ,
+.Xr dhcp6leased.conf 5 ,
 .Xr pf.conf 5 ,
 .Xr dhcp6leasectl 8 ,
 .Xr dhcp6leased 8 ,
+.Xr ifconfig 8 ,
 .Xr pfctl 8 ,
-.Xr rcctl 8
+.Xr rcctl 8 ,
+.Xr route 8
+.Sh STANDARDS
+.Rs
+.%A O. Troan
+.%A W. Dec
+.%A X. Li
+.%A C. Bao
+.%A S. Matsushima
+.%A T. Murakami
+.%A T. Taylor
+.%D July 2015
+.%R RFC 7597
+.%T Mapping of Address and Port with Encapsulation (MAP-E)
+.Re
+.Pp
+.Rs
+.%A M. Mrugalski
+.%A O. Troan
+.%A I. Farrer
+.%A S. Perreault
+.%A W. Dec
+.%A C. Bao
+.%A L. Yeh
+.%A X. Deng
+.%D July 2015
+.%R RFC 7598
+.%T DHCPv6 Options for Configuration of Softwire Address and Port-Mapped Clients
+.Re
 .Sh AUTHORS
-.An Panagiotis Atmatzidis Aq Mt atma@convalesco.org
+.An -nosplit
+The
+.Nm
+program was written by
+.An Panagiotis Atmatzidis Aq Mt atma@convalesco.org .

@@ -173,7 +173,7 @@
  const char	*pf_reasons[PFRES_MAX+1] = PFRES_NAMES;
 --- a/share/man/man5/pf.conf.5
 +++ b/share/man/man5/pf.conf.5
-@@ -1134,6 +1134,20 @@
+@@ -1134,6 +1134,21 @@
  option prevents
  .Xr pf 4
  from modifying the source port on TCP and UDP packets.
@@ -182,9 +182,10 @@
 +.Cm nat-to
 +rules, the
 +.Cm map-e-portset
-+option enables the source port translation of MAP-E (RFC 7597) Customer
-+Edge. The following example sets PSID offset to 4, PSID length to 6, and PSID to
-+20:
++option enables source port translation for a MAP-E (RFC 7597) Customer
++Edge.
++The following example sets the PSID offset to 4, the PSID length to 6, and the
++PSID to 20:
 +.Bd -literal -offset indent
 +match out on $gif_if nat-to ($gif_if) map-e-portset 4/6/20
 +.Ed
@@ -194,7 +195,7 @@
  .El
  .Pp
  When more than one redirection address or a table is specified,
-@@ -3007,7 +3021,8 @@
+@@ -3007,7 +3022,8 @@
                   "rdr-to" ( redirhost | "{" redirhost-list "}" )
                   [ portspec ] [ pooltype ] |
                   "nat-to" ( redirhost | "{" redirhost-list "}" )
