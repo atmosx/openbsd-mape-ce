@@ -76,8 +76,8 @@ Checks on `vm02` (OpenBSD 7.9, arm64):
 Current patch SHA256 values (updated when patches change):
 
 ```text
-c9974bec0612c9bd6b3aac6ddb245ca9c00d5f5cc590b5895c9132a8886971ac  patch/pf-map-e-ce/mape79.patch
-9a803e17bd80740bf1ea010fcdfe627769e74b215a93d206261a63bbf64440b3  patch/dhcp6leased-mape-softwire46-openbsd79.patch
+17665759dbfbbe1488180af041d34dbee38579e983da901a010bfcbfd0c0022b  patch/pf-map-e-ce/mape79.patch
+07bc1cf6381cfd9068f860e6994ba4d23ff2eb21714b7b3d8862c284a89ce8eb  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
 The full arm64 GENERIC.MP kernel build completed successfully (exit status 0).

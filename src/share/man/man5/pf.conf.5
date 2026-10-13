@@ -1139,9 +1139,10 @@ With
 .Cm nat-to
 rules, the
 .Cm map-e-portset
-option enables the source port translation of MAP-E (RFC 7597) Customer
-Edge. The following example sets PSID offset to 4, PSID length to 6, and PSID to
-20:
+option enables source port translation for a MAP-E (RFC 7597) Customer
+Edge.
+The following example sets the PSID offset to 4, the PSID length to 6, and the
+PSID to 20:
 .Bd -literal -offset indent
 match out on $gif_if nat-to ($gif_if) map-e-portset 4/6/20
 .Ed
