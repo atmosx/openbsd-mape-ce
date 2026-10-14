@@ -173,8 +173,7 @@ is_deeply(status()->{published_endpoints}, [], 'failed candidate not advertised'
 
 writefile("$tmp/up", "#!/bin/sh\necho up >> '$tmp/calls'\n");
 writefile("$tmp/calls", '');
-writefile("$tmp/lease-watch", "initial\n");
-$conf{LEASE_FILE} = "$tmp/lease-watch";
+$conf{LEASE_FILE} = "$tmp/lease-dir/lease-watch";
 writefile("$tmp/conf", config_text(\%conf));
 (my $short = $live) =~ s/lease-seconds: 60/lease-seconds: 4/;
 writefile("$tmp/live", $short);
@@ -190,7 +189,8 @@ my $end = time() + 3;
 sleep 0.05 while (readfile("$tmp/calls") eq '' || status()->{status} ne 'active') && time() < $end;
 is(readfile("$tmp/calls"), "up\n", 'continuous daemon configured');
 writefile("$tmp/fail", '');
-writefile("$tmp/lease-watch", "changed lease\n");
+mkdir "$tmp/lease-dir" or die $!;
+writefile("$tmp/lease-dir/lease-watch", "changed lease\n");
 sleep 1.3;
 is(readfile("$tmp/calls"), "up\n", 'read failure retains still-valid service');
 is(status()->{status}, 'degraded', 'lease-file stat trigger wakes daemon before interval');

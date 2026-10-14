@@ -225,6 +225,8 @@ sub sandbox_unveil_rules {
 	}
 	if ($conf{LEASE_FILE} && $conf{LEASE_FILE} =~ m{^/}) {
 		my $lease_dir = dirname($conf{LEASE_FILE});
+		$lease_dir = dirname($lease_dir)
+		    while $lease_dir ne "/" && !-d $lease_dir;
 		push @rules, [$lease_dir, "r"] if -d $lease_dir;
 	}
 
