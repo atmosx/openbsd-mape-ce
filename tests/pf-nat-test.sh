@@ -77,7 +77,7 @@ check_range(struct pf_pdesc *pd, struct pf_rule *r, struct pf_addr *addr,
 		visited[0] = 1;
 	}
 	assert(((low >> shift) & ((1U << r->nat.mape.psidlen) - 1)) == r->nat.mape.psid);
-	assert(high == ((low & ~1U) | ((1U << shift) - 1)));
+	assert(high == (low | ((1U << shift) - 1)));
 	assert(++calls <= expected_calls);
 	return exhausted == 2 ? -1 : exhausted;
 }

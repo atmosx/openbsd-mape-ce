@@ -23,7 +23,7 @@ use Maped qw(command status_text parse_lease complete_lease lease_text derive_ma
 use MapedStatus;
 use MapedPublish;
 use Fcntl qw(:flock);
-use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep stat);
 use File::Temp qw(tempfile);
 use File::Path qw(make_path);
 use POSIX qw(setsid strftime);
@@ -454,7 +454,7 @@ sub file_id {
 	my ($path) = @_;
 	return undef unless defined $path && $path ne "";
 	my @st = stat($path);
-	return @st ? join(":", $st[0], $st[1], $st[9], $st[7]) : undef;
+	return @st ? join(":", $st[0], $st[1], $st[9], $st[10], $st[7]) : undef;
 }
 
 sub wait_for_change {

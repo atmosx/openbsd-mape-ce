@@ -448,4 +448,3 @@
  
  	if (from->scrub_flags & PFSTATE_SETPRIO &&
  	    (from->set_prio[0] > IFQ_MAXPRIO ||
- 	    from->set_prio[1] > IFQ_MAXPRIO))

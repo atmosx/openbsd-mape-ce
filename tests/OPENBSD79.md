@@ -76,7 +76,7 @@ Checks on `vm02` (OpenBSD 7.9, arm64):
 Current patch SHA256 values (updated when patches change):
 
 ```text
-17665759dbfbbe1488180af041d34dbee38579e983da901a010bfcbfd0c0022b  patch/pf-map-e-ce/mape79.patch
+d752235ecad392468c9c5720049c87455ebacd38086a615742ff88e33b35da25  patch/pf-map-e-ce/mape79.patch
 07bc1cf6381cfd9068f860e6994ba4d23ff2eb21714b7b3d8862c284a89ce8eb  patch/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 

@@ -48,8 +48,10 @@ main(void)
 			if (a <= 15 && k >= 1 && k <= 16 - a) {
 				mape.psid = (1U << k) - 1;
 				assert(pf_mape_validate(&mape) == 0);
-				mape.psid++;
-				assert(pf_mape_validate(&mape) == EINVAL);
+				if (k < 16) {
+					mape.psid++;
+					assert(pf_mape_validate(&mape) == EINVAL);
+				}
 			}
 		}
 	}
