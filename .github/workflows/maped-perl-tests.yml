@@ -43,7 +43,7 @@ jobs:
               make pf-test OPENBSD_SRC="$PWD/src"
           } 2>&1 | tee "$RUNNER_TEMP/maped-perl-tests.log"
 
-      - name: Verify OpenBSD 7.9 patches and recorded checksums
+      - name: Verify OpenBSD 7.9 patches against local baseline
         id: patches
         shell: bash
         run: |
@@ -66,23 +66,78 @@ jobs:
                 exit 1
               }
             done
-            echo "ok - OpenBSD 7.9 patches apply cleanly and match src/ and tests/OPENBSD79.md"
+            echo "ok - OpenBSD 7.9 patches apply cleanly to local baseline and match src/ and tests/OPENBSD79.md"
+          } 2>&1 | tee -a "$RUNNER_TEMP/maped-perl-tests.log"
+
+      - name: Verify OpenBSD 7.9 patches against latest OPENBSD_7_9 CVS
+        id: cvs_patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            command -v cvs >/dev/null || {
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq cvs
+            }
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            cat >> ~/.ssh/config <<'EOF'
+          Host anoncvs*.openbsd.org anoncvs.spacehopper.org
+              StrictHostKeyChecking accept-new
+              BatchMode yes
+              ConnectTimeout 15
+          EOF
+            chmod 600 ~/.ssh/config
+
+            tmp=$(mktemp -d)
+            trap 'rm -rf "$tmp"' EXIT
+            mapfile -t files < <(
+              awk '
+                /^--- a\// { f = substr($2, 3) }
+                /^@@ -[1-9]/ && f != "" { print "src/" f; f = "" }
+              ' patch/pf-map-e-ce/mape79.patch patch/dhcp6leased-mape-softwire46-openbsd79.patch
+            )
+            fetched=0
+            for mirror in \
+              anoncvs@anoncvs.ca.openbsd.org:/cvs \
+              anoncvs@anoncvs.fr.openbsd.org:/cvs \
+              anoncvs@anoncvs.spacehopper.org:/cvs; do
+              echo "Checking out OPENBSD_7_9 sources from $mirror..."
+              if (cd "$tmp" && cvs -q -d "$mirror" checkout -rOPENBSD_7_9 "${files[@]}"); then
+                fetched=1
+                break
+              fi
+              rm -rf "$tmp/src"
+            done
+            if [ "$fetched" -ne 1 ]; then
+              echo "Failed to check out OPENBSD_7_9 sources from OpenBSD anoncvs mirrors" >&2
+              exit 1
+            fi
+            patch -p1 --fuzz=0 -d "$tmp/src" < patch/pf-map-e-ce/mape79.patch
+            patch -p1 --fuzz=0 -d "$tmp/src" < patch/dhcp6leased-mape-softwire46-openbsd79.patch
+            CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+              make pf-test OPENBSD_SRC="$tmp/src"
+            echo "ok - OpenBSD 7.9 patches apply cleanly to latest OPENBSD_7_9 CVS and pass pf-test"
           } 2>&1 | tee -a "$RUNNER_TEMP/maped-perl-tests.log"
 
       - name: Report test failure
-        if: ${{ failure() && (steps.tests.outcome == 'failure' || steps.patches.outcome == 'failure') }}
+        if: ${{ failure() && (steps.tests.outcome == 'failure' || steps.patches.outcome == 'failure' || steps.cvs_patches.outcome == 'failure') }}
         shell: bash
         run: |
           echo '::error::maped test suite failed. See the test output and maped-perl-test-log artifact.'
           {
             echo '## maped test suite failed'
             echo
+            echo "- Unit, helper, metrics, and PF tests: \`${{ steps.tests.outcome }}\`"
+            echo "- Local baseline patch & checksum verification: \`${{ steps.patches.outcome }}\`"
+            echo "- Latest \`OPENBSD_7_9\` CVS patch verification: \`${{ steps.cvs_patches.outcome }}\`"
+            echo
             echo 'Run `make test` and `make pf-test OPENBSD_SRC=src` locally to reproduce.'
             echo 'The full test output is available in the workflow step and the `maped-perl-test-log` artifact.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload failed test log
-        if: ${{ failure() && (steps.tests.outcome == 'failure' || steps.patches.outcome == 'failure') }}
+        if: ${{ failure() && (steps.tests.outcome == 'failure' || steps.patches.outcome == 'failure' || steps.cvs_patches.outcome == 'failure') }}
         uses: actions/upload-artifact@v4
         with:
           name: maped-perl-test-log
