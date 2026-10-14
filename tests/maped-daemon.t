@@ -49,7 +49,7 @@ writefile("$tmp/wan_mtu", "1492\n");
 writefile("$tmp/gif_mtu", "1452\n");
 my %conf = (WAN_IF => 'pppoe0', LEASE_IF => 'pppoe0', GIF_IF => 'gif0',
     GIF_MTU => 'auto', LAN_NET => '192.168.1.0/24', MAPED_STATE_DIR => "$tmp/state",
-    MAPED_UP => "$tmp/up", MAPED_DOWN => "$tmp/down", MAPED_DERIVE => "$repo/maped/maped-derive",
+    MAPED_UP => "$tmp/up", MAPED_DOWN => "$tmp/down",
     DHCP6LEASECTL => "$tmp/ctl", IFCONFIG => "$tmp/ifconfig", PFCTL => "$tmp/pfctl", ROUTE => "$tmp/route");
 writefile("$tmp/conf", config_text(\%conf));
 sub status { decode_json(readfile("$tmp/state/status.json")) }
