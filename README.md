@@ -1,13 +1,9 @@
 # OpenBSD MAP-E CE support
 
-This repository contains patches and utilities to add Customer Edge Mapping of
-Address and Port with Encapsulation (MAP-E CE,
+This repository contains experimental patches and utilities to add Customer Edge
+Mapping of Address and Port with Encapsulation (MAP-E CE,
 [RFC 7597](https://datatracker.ietf.org/doc/html/rfc7597)) support to
 [OpenBSD](https://www.openbsd.org/) 7.9.
-
-## Status
-
-This is an experimental project.
 
 ## How it works
 
@@ -250,30 +246,11 @@ helper paths.
 
 ## 4. Prometheus metrics
 
-The `metrics/mape-prometheus-metrics` script writes MAP-E and `pf(4)` metrics in
-Prometheus textfile format. Install it with:
-
-```ksh
-cd /usr/local/src/openbsd-mape-ce
-doas make metrics-install
-doas install -d -o root -g wheel -m 755 /var/prometheus/textfile
-```
-
-Run it from `cron(8)` so the metrics file is refreshed regularly:
-
-```cron
-* * * * * /usr/local/sbin/mape-prometheus-metrics >/dev/null 2>&1
-```
-
-Serve the generated file with the `node_exporter` textfile collector:
-
-```ksh
-node_exporter --collector.textfile.directory=/var/prometheus/textfile
-```
-
-Then scrape the router's `node_exporter` from Prometheus. See
-[`metrics/README.md`](metrics/README.md) for an example scrape configuration,
-`httpd(8)` fallback serving, the companion Grafana dashboard, and the full
+`metrics/mape-prometheus-metrics` exports MAP-E control-plane health, `pf(4)`
+queue statistics, and `pfctl_exporter`-compatible metrics in Prometheus
+textfile format (`doas make metrics-install`). See
+[`metrics/README.md`](metrics/README.md) for `cron(8)` and `node_exporter`
+setup, scrape configuration, the companion Grafana dashboard, and the full
 metric list.
 
 ## 5. Allocation status and history
