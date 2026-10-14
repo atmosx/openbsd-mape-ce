@@ -104,10 +104,10 @@ sub publish {
 				push @$records, {allocation => $allocation,
 				    'first-seen' => stamp($now), 'last-seen' => stamp($now)};
 			}
-			if (defined $self->{max_history} && @$records > $self->{max_history}) {
-				splice @$records, 0, @$records - $self->{max_history};
-			}
 		}
+	}
+	if (defined $self->{max_history} && @$records > $self->{max_history}) {
+		splice @$records, 0, @$records - $self->{max_history};
 	}
 	$doc->{record} = $records;
 	my $endpoints = $args{plan} ? JSON::PP::decode_json($args{plan}{MAPED_PUBLISH_JSON} || '[]') : [];
@@ -118,9 +118,9 @@ sub publish {
 	    $json->encode($published) ne $json->encode($endpoints)) {
 		push @events, {at => stamp($now), status => $args{status}, endpoints => $endpoints};
 		$published = $endpoints;
-		if (defined $self->{max_history} && @events > $self->{max_history}) {
-			splice @events, 0, @events - $self->{max_history};
-		}
+	}
+	if (defined $self->{max_history} && @events > $self->{max_history}) {
+		splice @events, 0, @events - $self->{max_history};
 	}
 	$doc->{publish_events} = \@events;
 	(my $dir = $self->{path}) =~ s{/[^/]+$}{};
