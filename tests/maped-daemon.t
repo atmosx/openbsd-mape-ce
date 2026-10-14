@@ -187,10 +187,10 @@ if (!$pid) {
 	die $!;
 }
 my $end = time() + 3;
-sleep 0.05 while readfile("$tmp/calls") eq '' && time() < $end;
+sleep 0.05 while (readfile("$tmp/calls") eq '' || status()->{status} ne 'active') && time() < $end;
 is(readfile("$tmp/calls"), "up\n", 'continuous daemon configured');
 writefile("$tmp/fail", '');
-writefile("$tmp/lease-watch", "changed\n");
+writefile("$tmp/lease-watch", "changed lease\n");
 sleep 1.3;
 is(readfile("$tmp/calls"), "up\n", 'read failure retains still-valid service');
 is(status()->{status}, 'degraded', 'lease-file stat trigger wakes daemon before interval');
