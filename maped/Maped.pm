@@ -150,7 +150,7 @@ sub derive_mape {
 		die "maped-derive: $key missing\n";
 	};
 	my $pd = $env->{MAPED_SNAPSHOT} ? ($lease->{PD_PREFIX} // '') :
-	    ($env->{PD_PREFIX} || $lease->{PD_PREFIX} || '');
+	    ($lease->{PD_PREFIX} || $env->{PD_PREFIX} || '');
 	die "maped-derive: could not find delegated prefix; set PD_PREFIX=.../... in /etc/maped.conf for testing\n"
 	    unless $pd ne '';
 	my ($pd_addr, $pd_plen) = $pd =~ /^([^\/]+)\/(\d+)$/ or
