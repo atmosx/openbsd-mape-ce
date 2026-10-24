@@ -49,7 +49,7 @@ writefile("$tmp/wan_mtu", "1492\n");
 writefile("$tmp/gif_mtu", "1452\n");
 my %conf = (WAN_IF => 'pppoe0', LEASE_IF => 'pppoe0', GIF_IF => 'gif0',
     GIF_MTU => 'auto', LAN_NET => '192.168.1.0/24', MAPED_STATE_DIR => "$tmp/state",
-    MAPED_UP => "$tmp/up", MAPED_DOWN => "$tmp/down", MAPED_DERIVE => "$repo/maped/maped-derive",
+    MAPED_UP => "$tmp/up", MAPED_DOWN => "$tmp/down",
     DHCP6LEASECTL => "$tmp/ctl", IFCONFIG => "$tmp/ifconfig", PFCTL => "$tmp/pfctl", ROUTE => "$tmp/route");
 writefile("$tmp/conf", config_text(\%conf));
 sub status { decode_json(readfile("$tmp/state/status.json")) }
@@ -173,6 +173,8 @@ is_deeply(status()->{published_endpoints}, [], 'failed candidate not advertised'
 
 writefile("$tmp/up", "#!/bin/sh\necho up >> '$tmp/calls'\n");
 writefile("$tmp/calls", '');
+$conf{LEASE_FILE} = "$tmp/lease-dir/lease-watch";
+writefile("$tmp/conf", config_text(\%conf));
 (my $short = $live) =~ s/lease-seconds: 60/lease-seconds: 4/;
 writefile("$tmp/live", $short);
 my $pid = fork();
@@ -180,21 +182,25 @@ die $! unless defined $pid;
 if (!$pid) {
 	open STDOUT, '>', "$tmp/daemon.log" or die $!;
 	open STDERR, '>&', STDOUT or die $!;
-	exec $^X, "$tmp/maped", '-f', '-p', '-i', '1', "$tmp/conf";
+	exec $^X, "$tmp/maped", '-f', '-i', '10', "$tmp/conf";
 	die $!;
 }
 my $end = time() + 3;
-sleep 0.05 while readfile("$tmp/calls") eq '' && time() < $end;
+sleep 0.05 while (readfile("$tmp/calls") eq '' || status()->{status} ne 'active') && time() < $end;
 is(readfile("$tmp/calls"), "up\n", 'continuous daemon configured');
 writefile("$tmp/fail", '');
-sleep 1.2;
+mkdir "$tmp/lease-dir" or die $!;
+writefile("$tmp/lease-dir/lease-watch", "changed lease\n");
+sleep 1.3;
 is(readfile("$tmp/calls"), "up\n", 'read failure retains still-valid service');
-is(status()->{status}, 'degraded', 'temporary query failure reported');
-sleep 3.5;
+is(status()->{status}, 'degraded', 'lease-file stat trigger wakes daemon before interval');
+sleep 3.2;
 like(readfile("$tmp/calls"), qr/up\ndown\n/, 'read failure cannot extend confirmed expiry');
 is(status()->{status}, 'inactive', 'expired status invalidated');
 kill 'TERM', $pid;
 waitpid($pid, 0);
+is($?, 0, 'daemon exits cleanly on SIGTERM');
+like(readfile("$tmp/daemon.log"), qr/stopping on signal/, 'clean signal shutdown logged');
 
 SKIP: {
 	skip 'OpenBSD-only sandbox failure test', 2 unless $^O eq 'openbsd';

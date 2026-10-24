@@ -78,8 +78,15 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -r "$CONF" ]; then
-	# shellcheck disable=SC1090
-	. "$CONF"
+	SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+	MAPED_CONFIG="${MAPED_CONFIG:-/usr/local/libexec/maped/maped-config}"
+	if [ ! -x "$MAPED_CONFIG" ] && [ -x "$SCRIPT_DIR/../libexec/maped/maped-config" ]; then
+		MAPED_CONFIG="$SCRIPT_DIR/../libexec/maped/maped-config"
+	elif [ ! -x "$MAPED_CONFIG" ] && [ -x "$SCRIPT_DIR/../maped/maped-config" ]; then
+		MAPED_CONFIG="$SCRIPT_DIR/../maped/maped-config"
+	fi
+	CONFIG_TEXT=$("$MAPED_CONFIG" "$CONF")
+	eval "$CONFIG_TEXT"
 fi
 
 WAN_IF="${WAN_IF:-pppoe0}"
@@ -149,11 +156,11 @@ config_matches_lease() {
 	[ -n "$ce" ] && [ -n "$br" ] && [ -n "$ipv4" ] &&
 	    [ -n "$offset" ] && [ -n "$length" ] && [ -n "$psid" ] || return 1
 	perl -MSocket=AF_INET6,inet_pton - "$ce" "$br" "$ipv4" \
-	    "$offset/$length/$psid" "$GIF_IF" "$IF_GIF" "$IF_WAN" \
+	    "$offset" "$length" "$psid" "$GIF_IF" "$IF_GIF" "$IF_WAN" \
 	    "$PF_MMAPE" "$ROUTES" "${MAPED_PEER_IPV4:-0.0.0.1}" <<'PERL'
 use strict;
 use warnings;
-my ($ce, $br, $ipv4, $portset, $gif, $gif_text, $wan_text, $rules, $routes, $peer) = @ARGV;
+my ($ce, $br, $ipv4, $offset, $length, $psid, $gif, $gif_text, $wan_text, $rules, $routes, $peer) = @ARGV;
 sub same_ipv6 {
 	my ($a, $b) = @_;
 	my $packed_a = inet_pton(AF_INET6, $a // "");
@@ -165,12 +172,23 @@ exit 1 unless same_ipv6($ce, $tunnel_ce) && same_ipv6($br, $tunnel_br);
 exit 1 unless $gif_text =~ /\binet \Q$ipv4\E --> \Q$peer\E(?:\s|$)/;
 my @aliases = $wan_text =~ /\binet6 ([0-9a-fA-F:]+)/g;
 exit 1 unless grep { same_ipv6($ce, $_) } @aliases;
-my @nat = grep { /\bmap-e-portset\b/ } split /\n/, $rules;
-exit 1 unless @nat;
-for my $rule (@nat) {
-	exit 1 unless $rule =~ /\bon \Q$gif\E\s/ &&
-	    $rule =~ /\bnat-to \(\Q$gif\E\)/ &&
-	    $rule =~ /\bmap-e-portset \Q$portset\E(?:\s|$)/;
+if ($length > 0) {
+	my $portset = "$offset/$length/$psid";
+	my @nat = grep { /\bmap-e-portset\b/ } split /\n/, $rules;
+	exit 1 unless @nat;
+	for my $rule (@nat) {
+		exit 1 unless $rule =~ /\bon \Q$gif\E\s/ &&
+		    $rule =~ /\bnat-to \(\Q$gif\E\)/ &&
+		    $rule =~ /\bmap-e-portset \Q$portset\E(?:\s|$)/;
+	}
+} else {
+	my @nat = grep { /\bnat-to\b/ } split /\n/, $rules;
+	exit 1 unless @nat;
+	for my $rule (@nat) {
+		exit 1 if $rule !~ /\bon \Q$gif\E\s/ ||
+		    $rule !~ /\bnat-to \(\Q$gif\E\)/ ||
+		    $rule =~ /\bmap-e-portset\b/;
+	}
 }
 exit 1 unless $routes =~ /^default\s+\S+\s+.*\s\Q$gif\E\s*$/m;
 PERL

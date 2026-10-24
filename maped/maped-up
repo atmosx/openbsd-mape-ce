@@ -10,17 +10,18 @@ eval "$CONFIG_TEXT"
 MAPED_SNAPSHOT="${2:-}"
 export MAPED_SNAPSHOT
 
-DERIVE_COMMAND="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
-[ -x "$DERIVE_COMMAND" ] || DERIVE_COMMAND="$SCRIPT_DIR/maped-derive"
+# Reuse pre-derived values from maped's applied.conf unless standalone or overridden.
+if [ -z "${CE_IPV6:-}" ] || [ -z "${MAPE_IPV4:-}" ] || [ -n "${MAPED_DERIVE:-}${DERIVE_COMMAND:-}" ]; then
+	DERIVE_COMMAND="${MAPED_DERIVE:-${DERIVE_COMMAND:-/usr/local/libexec/maped/maped-derive}}"
+	[ -x "$DERIVE_COMMAND" ] || DERIVE_COMMAND="$SCRIPT_DIR/maped-derive"
+	export PD_PREFIX PD_IF LEASE_FILE LEASE_IF WAN_IF DHCP6LEASECTL
+	export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_OFFSET BR_IPV6
+	eval "$("$DERIVE_COMMAND")"
+fi
 MAPED_PEER_IPV4="${MAPED_PEER_IPV4:-${MAPE_PEER_IPV4:-0.0.0.1}}"
 IFCONFIG="${IFCONFIG:-ifconfig}"
 PFCTL="${PFCTL:-pfctl}"
 ROUTE="${ROUTE:-route}"
-
-export PD_PREFIX PD_IF LEASE_FILE LEASE_IF WAN_IF DHCP6LEASECTL
-export MAP_IPV6_PREFIX MAP_IPV6_PLEN MAP_IPV4_PREFIX MAP_IPV4_PLEN EA_LEN PSID_OFFSET BR_IPV6
-
-eval "$("$DERIVE_COMMAND")"
 
 # Render only the daemon's validated candidate, not a mutable service file.
 PUBLISH_RULES=$("$SCRIPT_DIR/maped-publish" "$CONF")
@@ -101,11 +102,17 @@ mkdir -p "$(dirname "$PF_ANCHOR_FILE")"
 PF_ANCHOR_TMP="$(mktemp "$PF_ANCHOR_FILE.XXXXXXXXXX")"
 trap 'rm -f "$PF_ANCHOR_TMP"' EXIT
 
+if [ "${PSID_LEN:-0}" -gt 0 ]; then
+	NAT_PORTSET=" map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID"
+else
+	NAT_PORTSET=""
+fi
+
 cat > "$PF_ANCHOR_TMP" <<EOF
 match out on $GIF_IF inet proto tcp flags S/SA scrub (max-mss $TCP_MSS)
 
-match out on $GIF_IF inet from ($GIF_IF) to any nat-to ($GIF_IF) map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID
-match out on $GIF_IF inet from $LAN_NET to any nat-to ($GIF_IF) map-e-portset $PSID_OFFSET/$PSID_LEN/$PSID
+match out on $GIF_IF inet from ($GIF_IF) to any nat-to ($GIF_IF)$NAT_PORTSET
+match out on $GIF_IF inet from $LAN_NET to any nat-to ($GIF_IF)$NAT_PORTSET
 
 pass out quick on $WAN_IF inet6 proto 4 from $CE_IPV6 to $BR_IPV6 keep state
 pass in  quick on $WAN_IF inet6 proto 4 from $BR_IPV6 to $CE_IPV6 keep state

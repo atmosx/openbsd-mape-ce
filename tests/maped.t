@@ -4,7 +4,7 @@ use Test::More;
 use FindBin;
 use File::Temp qw(tempfile);
 use lib "$FindBin::Bin/../maped";
-use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
+use Maped qw(command status_text parse_lease complete_lease lease_text derive_mape parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 my ($rc, $out) = command(2, 1024, $^X, '-e', 'print "ok"');
 is($rc, 0, 'successful child');
 is($out, 'ok', 'capture output');
@@ -75,6 +75,8 @@ close $snapshot;
 	like($out, qr/does not contain the MAP IPv4 suffix/, 'missing suffix diagnostic');
 }
 unlink $snapshot_path;
+my %derived = derive_mape(\%lease, {PD_PREFIX => '2001:db8:100:ff00::/56'});
+is($derived{PD_PREFIX}, '2001:db8:100::/56', 'live lease PD_PREFIX takes precedence over config PD_PREFIX');
 
 my %cfg = parse_config("VALUE=\"hello # world\" # comment\nEMPTY=\nPATH='/some path'\n");
 is($cfg{VALUE}, 'hello # world', 'quoted comment preserved');
@@ -149,4 +151,10 @@ for my $case (
 	$actual[$case->[0]] =~ s/\Q$case->[1]\E/$case->[2]/;
 	like(runtime_mismatch(\%plan, @actual), $case->[3], "detect runtime mismatch: $case->[1]");
 }
+my %unshared_plan = (%plan, PSID_LEN => 0, PSID => 0);
+my $unshared_rules = "match out on gif0 inet from any to any nat-to (gif0)\nmatch out on gif0 inet proto tcp flags S/SA scrub (max-mss 1412)\n";
+is(runtime_mismatch(\%unshared_plan, $gif, $wan, $unshared_rules, $route), undef,
+    'unshared PSID_LEN=0 runtime matches unrestricted NAT');
+like(runtime_mismatch(\%unshared_plan, $gif, $wan, $rules, $route), qr/NAT parameters/,
+    'unshared PSID_LEN=0 rejects restricted map-e-portset rule');
 done_testing;

@@ -17,12 +17,13 @@ is(MapedStatus::port_set(0, 16, 65535)->{port_count}, 1, 'zero offset boundary')
 for my $bad ([16,1,0], [6,11,0], [6,6,64], [6,0,1], [-1,1,0], ['x',1,0]) {
 	ok(!eval { MapedStatus::port_set(@$bad); 1 }, 'invalid tuple rejected');
 }
-for my $a (1..15) {
+for my $a (0..15) {
 	for my $k (1..16-$a) {
 		for my $p (0, (1 << $k)-1) {
 			my $s = MapedStatus::port_set($a,$k,$p);
 			my $m = 16-$a-$k;
-			my $valid = $s->{port_count} == ((1 << $a)-1)*(1 << $m);
+			my $blocks = $a ? (1 << $a) - 1 : 1;
+			my $valid = $s->{port_count} == $blocks * (1 << $m);
 			my $last = -1;
 			for my $r (@{$s->{ranges}}) {
 				$valid &&= $r->{first} > $last && $r->{last} <= 65535 &&
@@ -99,4 +100,24 @@ is_deeply($broken->{publish_events}, [], 'failed write does not advance endpoint
 is(scalar @tmp, 1, 'failed publication cleans temporary file');
 open $fh, '>', $path or die $!; print {$fh} '{broken'; close $fh;
 ok(!eval { MapedStatus->new($path); 1 }, 'corrupt history not silently discarded');
+unlink $path;
+ok(!eval { MapedStatus->new($path, max_history => 0); 1 }, 'reject zero max_history');
+my $bounded = MapedStatus->new($path, max_history => 2);
+for my $idx (1..4) {
+	$p{PSID} = $idx;
+	$p{MAPED_PUBLISH_JSON} = JSON::PP::encode_json([{name => 'web', protocol => 'tcp',
+	    external_address => $p{MAPE_IPV4}, external_port => 2000 + $idx,
+	    target_address => '127.0.0.1', target_port => 80}]);
+	$d = $bounded->publish(status => 'active', plan => \%p, now => 9000 + $idx);
+}
+is(scalar @{$d->{record}}, 2, 'record bounded by max_history');
+is($d->{record}[0]{allocation}{psid}, 3, 'oldest record entries pruned');
+is(scalar @{$d->{publish_events}}, 2, 'publish_events bounded by max_history');
+is($d->{publish_events}[0]{endpoints}[0]{external_port}, 2003, 'oldest publish_events pruned');
+my $shrunk = MapedStatus->new($path, max_history => 1);
+$d = $shrunk->publish(status => 'initializing', now => 9010);
+is(scalar @{$d->{record}}, 1, 'loaded record pruned without active plan');
+is($d->{record}[0]{allocation}{psid}, 4, 'newest loaded record entry retained');
+is(scalar @{$d->{publish_events}}, 1, 'loaded publish_events pruned without new event');
+is($d->{publish_events}[0]{endpoints}[0]{external_port}, 2004, 'newest loaded publish_event retained');
 done_testing;

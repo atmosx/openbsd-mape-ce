@@ -53,7 +53,8 @@ EOF
 cat > "$tmp/bin/derive" <<'EOF'
 #!/bin/sh
 printf '%s\n' PD_PREFIX=2001:db8::/56 CE_IPV6=2001:db8::1 \
-    BR_IPV6=2001:db8::2 MAPE_IPV4=192.0.2.1 PSID_OFFSET=6 PSID_LEN=8 PSID=1
+    BR_IPV6=2001:db8::2 MAPE_IPV4=192.0.2.1 PSID_OFFSET=6 \
+    PSID_LEN="${TEST_PSID_LEN:-8}" PSID="${TEST_PSID:-1}"
 EOF
 chmod +x "$tmp/bin/"*
 cat > "$tmp/base.conf" <<EOF
@@ -169,4 +170,13 @@ for fail in -nf -f; do
     fi
     n=$((n + 1)); echo "ok $n - propagate publishing PF failure $fail"
 done
+# Unshared IPv4 (PSID_LEN=0) must omit map-e-portset because pf(4) rejects length 0.
+cp "$tmp/base.conf" "$tmp/conf"
+: > "$tmp/calls"
+env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" WAN_TEST_MTU=1492 \
+    TEST_PSID_LEN=0 TEST_PSID=0 sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
+grep -qx 'match out on gif0 inet from (gif0) to any nat-to (gif0)' "$tmp/anchor"
+grep -qx 'match out on gif0 inet from 192.168.1.0/24 to any nat-to (gif0)' "$tmp/anchor"
+! grep -q 'map-e-portset' "$tmp/anchor"
+n=$((n + 1)); echo "ok $n - unshared PSID_LEN=0 emits unrestricted nat-to without map-e-portset"
 printf '1..%s\n' "$n"
