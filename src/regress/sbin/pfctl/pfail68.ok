@@ -1,0 +1,23 @@
+stdin:1: map-e-portset cannot be redefined
+stdin:2: MAP-E PSID offset must be 1-15: 0
+stdin:3: MAP-E PSID offset must be 1-15: 16
+stdin:4: invalid MAP-E PSID length: 10
+stdin:5: invalid MAP-E PSID: -1
+stdin:6: invalid MAP-E PSID: 1024
+stdin:7: the 'map-e-portset' option is only valid with nat rules
+stdin:7: skipping rule due to errors
+stdin:7: rule expands to no valid combination
+stdin:8: the 'map-e-portset' option can't be used with 'static-port'
+stdin:8: skipping rule due to errors
+stdin:8: rule expands to no valid combination
+stdin:9: the 'map-e-portset' option can't be used when specifying a port range
+stdin:9: skipping rule due to errors
+stdin:9: rule expands to no valid combination
+stdin:10: the 'map-e-portset' option can't be used when specifying a port range
+stdin:10: skipping rule due to errors
+stdin:10: rule expands to no valid combination
+stdin:11: the 'map-e-portset' option can't be used when specifying a port range
+stdin:11: skipping rule due to errors
+stdin:11: rule expands to no valid combination
+stdin:12: invalid MAP-E PSID length: 0
+stdin:13: invalid MAP-E PSID length: 9223372036854775807

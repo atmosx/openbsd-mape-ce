@@ -28,7 +28,7 @@
 .Nm
 watches DHCPv6 MAP-E lease state and configures the local Customer Edge
 runtime.
-When lease data changes, or when the configured runtime state is missing,
+When lease data changes, or when the configured runtime state differs,
 .Nm
 runs
 .Pa /usr/local/libexec/maped/maped-up
@@ -45,7 +45,7 @@ and are not intended as the primary user interface.
 The options are as follows:
 .Bl -tag -width Ds
 .It Fl 1
-Run once and exit.
+Run once and exit nonzero if provisioning or configuration fails.
 .It Fl d
 Run as a daemon.
 .It Fl f
@@ -71,10 +71,18 @@ is not specified,
 .Nm
 reads
 .Pa /etc/maped.conf .
+.Pp
+External commands are limited to 30 seconds and 1 MiB of captured output.
+Timed-out helper process groups are terminated.
 .Sh CONFIGURATION
-The configuration file is a
-.Xr sh 1
-file read by the helper programs.
+The daemon and helpers accept the same literal shell-style assignments.
+Values may be unquoted, single-quoted, or double-quoted.
+Comments outside quotes are supported.
+Variable expansion, command substitution, escapes, and shell commands
+are rejected; use explicit values instead.
+Restart the daemon after editing configuration.
+It passes a frozen, safely quoted configuration to each helper,
+so an edit cannot change only half of an operation.
 The following variables are commonly set:
 .Bl -tag -width PF_ANCHOR_FILE
 .It Va WAN_IF
@@ -92,16 +100,39 @@ interface to create.
 .It Va GIF_MTU
 MTU assigned to
 .Va GIF_IF .
+The default,
+.Cm auto ,
+uses the current
+.Va WAN_IF
+MTU minus the 40-byte IPv6 encapsulation header each time the helper runs.
+The route to the border relay must use that WAN interface.
+A numeric value overrides automatic selection.
+The result must be in the
+.Xr gif 4
+range 1280 through 8192; otherwise the helper fails before changing interfaces.
+The generated anchor clamps IPv4 TCP MSS to this MTU minus 40.
+For a PPPoE MTU of 1492, these values are 1452 and 1412 respectively.
+This is initial interface sizing, not tunnel path MTU discovery.
+Health checks recompute it when the WAN MTU changes.
+This does not discover smaller downstream links.
+Use a lower explicit MTU when the path requires it.
 .It Va LEASE_FILE
-Optional
-.Xr dhcp6leased 8
-lease file to watch.
+Optional lease file used only as a change notification trigger.
+Persisted lease contents do not authorize service.
+The daemon queries current
+.Xr dhcp6leasectl 8
+state with
+.Fl l Fl m
+and requires an exact remaining lifetime.
+Install the matching patched control utility before upgrading maped.
 .It Va PF_ANCHOR_FILE
 Path used to store the generated
 .Xr pf 4
 anchor.
 .It Va MAPED_UP
 Runtime configuration helper.
+.It Va MAPED_DOWN
+Ownership-aware withdrawal helper.
 .It Va MAPED_DERIVE
 MAP-E parameter derivation helper.
 .It Va MAPED_STATE_DIR
@@ -114,6 +145,18 @@ interface.
 Log level for
 .Nm .
 .El
+.Pp
+Confirmed withdrawal or expiry removes the owned MAP-E configuration.
+A temporary control-query failure retains service only until the last
+confirmed monotonic deadline.
+After restart, a failed query retires previously recorded ownership because
+there is no in-memory proof that the old lease remains valid.
+The state directory must be owned by root and not writable by other users.
+Only one daemon may own it at a time.
+Reserve the configured GIF interface and the mape PF anchor for this daemon.
+Cleanup deletes the default route only when it still belongs to the recorded
+tunnel, and removes the CE alias only when maped originally added it.
+Legacy lease.state files alone are not ownership records.
 .Sh FILES
 .Bl -tag -width /usr/local/libexec/maped/maped-derive -compact
 .It Pa /etc/maped.conf

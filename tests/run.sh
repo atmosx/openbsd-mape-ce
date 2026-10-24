@@ -81,53 +81,9 @@ run_derive_from_zero_psid_lease()
 	    "$fixtures/cosmote-like-zero-psid.expected" "$out"
 }
 
-run_maped_once_with_stub_helper()
-{
-	if [ "$(id -u)" -ne 0 ]; then
-		skip "maped one-shot runs stub helper" "requires root"
-		return
-	fi
-
-	state_dir="$tmp/state"
-	conf="$tmp/maped.conf"
-	helper="$state_dir/maped-up"
-	out="$tmp/maped.out"
-	mkdir -p "$state_dir"
-
-	cat > "$helper" <<'EOF'
-#!/bin/sh
-set -eu
-. "$1"
-printf '%s\n' "$1" > "$MAPED_STATE_DIR/up.called"
-EOF
-	chmod +x "$helper"
-
-	cat > "$conf" <<EOF
-LEASE_FILE="$fixtures/lease-file.txt"
-MAPED_STATE_DIR="$state_dir"
-MAPED_UP="$helper"
-MAPED_LOG_LEVEL="warn"
-EOF
-
-	if perl "$repo/maped/maped" -1 -f -p -i 1 "$conf" > "$out" 2>&1; then
-		:
-	else
-		fail "maped one-shot runs stub helper" "$out"
-	fi
-
-	test -f "$state_dir/up.called" ||
-	    fail "maped one-shot records helper execution" "$out"
-	ok "maped one-shot records helper execution"
-
-	expected_state="$tmp/state.expected"
-	perl -0pe 's/\n\z//' "$fixtures/state.expected" > "$expected_state"
-	compare "maped one-shot writes lease state" \
-	    "$expected_state" "$state_dir/lease.state"
-}
 
 run_derive_from_lease_file
 run_derive_from_dhcp6leasectl
 run_derive_from_zero_psid_lease
-run_maped_once_with_stub_helper
 
 printf '1..%d\n' "$test_no"

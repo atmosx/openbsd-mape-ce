@@ -1,0 +1,11 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use FindBin;
+use lib "$FindBin::Bin";
+use Maped qw(parse_config config_text);
+@ARGV == 1 or die "usage: maped-config config\n";
+open my $fh, '<', $ARGV[0] or die "maped-config: $!\n";
+local $/;
+my %config = parse_config(<$fh>);
+print config_text(\%config);

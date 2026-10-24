@@ -72,7 +72,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "description": "Boolean health checks emitted by mape-prometheus-metrics. maped_up and dhcp6leased_up come from rcctl; dhcp6leased_mape_bound confirms the DHCPv6 MAP-E option is present; pppoe_session_up checks WAN link state; mape_gif_up and mape_gif_running check the gif tunnel; mape_anchor_portset_present and mape_anchor_file_portset_present verify live and generated PF map-e-portset rules; mape_default_route_v4/v6 check expected routing; mape_derive_ok confirms maped-derive can calculate CE IPv6 and MAP-E IPv4 values.",
+          "description": "Boolean health checks emitted by mape-prometheus-metrics. maped_up and dhcp6leased_up come from rcctl; dhcp6leased_mape_bound confirms the DHCPv6 MAP-E option is present; pppoe_session_up checks WAN link state; mape_gif_up and mape_gif_running check the gif tunnel; mape_anchor_portset_present and mape_anchor_file_portset_present verify live and generated PF map-e-portset rules; mape_default_route_v4/v6 check expected routing; mape_derive_ok confirms maped-derive can calculate CE IPv6 and MAP-E IPv4 values; mape_config_matches_lease checks the live tunnel, address, route, and PF NAT port set; the minimum mape_collection_success shows whether all data sources collected successfully.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -285,6 +285,28 @@
               "legendFormat": "maped-derive OK",
               "range": true,
               "refId": "K"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "editorMode": "code",
+              "expr": "mape_config_matches_lease{instance=~\"$instance\"}",
+              "legendFormat": "live MAP-E matches lease",
+              "range": true,
+              "refId": "L"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "editorMode": "code",
+              "expr": "min by (instance) (mape_collection_success{instance=~\"$instance\"})",
+              "legendFormat": "all sources collected",
+              "range": true,
+              "refId": "M"
             }
           ],
           "title": "MAP-E Health",
@@ -606,7 +628,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "description": "Current PF queue occupancy as a percentage of configured queue limit. pf_queue_length and pf_queue_limit are gauges from pfctl -sq -v; sustained non-zero fill suggests congestion.",
+          "description": "Current PF queue occupancy as a percentage of configured queue limit. Zero or missing limits are excluded rather than displayed as infinite fill; sustained non-zero fill suggests congestion.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -696,7 +718,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "100 * pf_queue_length{instance=~\"$instance\", queue=~\"$queue\"} / pf_queue_limit{instance=~\"$instance\", queue=~\"$queue\"}",
+              "expr": "100 * pf_queue_length{instance=~\"$instance\", queue=~\"$queue\"} / (pf_queue_limit{instance=~\"$instance\", queue=~\"$queue\"} > 0)",
               "legendFormat": "{{queue}} ({{instance}})",
               "range": true,
               "refId": "A"
@@ -805,6 +827,119 @@
           ],
           "title": "MAP-E Queue Drops",
           "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "description": "Shows the result of each collector command separately. A failed command removes its PF samples rather than turning missing data into zero; inspect the failing source when the aggregate health check is down.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "failed",
+                      "color": "red",
+                      "index": 0
+                    },
+                    "1": {
+                      "text": "ok",
+                      "color": "green",
+                      "index": 1
+                    }
+                  }
+                }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              },
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 23
+          },
+          "id": 9007,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.5.7",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "editorMode": "code",
+              "expr": "mape_collection_success{instance=~\"$instance\"}",
+              "legendFormat": "{{instance}} / {{source}}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Collection by Source",
+          "type": "stat"
         }
       ],
       "title": "MAP-E / maped Health",
