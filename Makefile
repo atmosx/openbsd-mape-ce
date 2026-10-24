@@ -26,6 +26,7 @@ all:
 	@echo "Run 'make install' as root to install MAP-E CE maped."
 
 test:
+	perl tests/maped-status.t
 	perl tests/maped.t
 	perl tests/maped-daemon.t
 	sh tests/maped-down-test.sh
@@ -51,6 +52,8 @@ install-bin:
 	done
 	install -o $(OWNER) -g $(GROUP) -m 444 maped/Maped.pm $(DESTDIR)$(LIBEXECDIR)/Maped.pm
 
+	install -o $(OWNER) -g $(GROUP) -m 444 maped/MapedStatus.pm $(DESTDIR)$(LIBEXECDIR)/MapedStatus.pm
+
 install-conf:
 	install -d -o $(OWNER) -g $(GROUP) -m 755 $(DESTDIR)$(SYSCONFDIR)
 	@if [ ! -f "$(DESTDIR)$(SYSCONFDIR)/$(CONF)" ]; then \
@@ -73,6 +76,7 @@ metrics-install:
 	install -o $(OWNER) -g $(GROUP) -m $(BINMODE) metrics/$(METRICS) $(DESTDIR)$(BINDIR)/$(METRICS)
 
 uninstall:
+	rm -f $(DESTDIR)$(LIBEXECDIR)/MapedStatus.pm
 	rm -f $(DESTDIR)$(LIBEXECDIR)/Maped.pm
 	rm -f $(DESTDIR)$(BINDIR)/$(SCRIPT)
 	rm -f $(DESTDIR)$(BINDIR)/$(METRICS)

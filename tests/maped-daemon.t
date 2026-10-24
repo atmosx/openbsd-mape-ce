@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 use Test::More;
+use JSON::PP qw(decode_json);
 use Time::HiRes qw(sleep time);
 use File::Temp qw(tempdir);
 use File::Copy qw(copy);
@@ -26,6 +27,7 @@ $n = ($code =~ s/\$state_stat\[4\] != 0/\$state_stat[4] != \$>/);
 is($n, 1, 'test state directory owned by test UID');
 writefile("$tmp/maped", $code);
 copy("$repo/maped/Maped.pm", "$tmp/Maped.pm") or die $!;
+copy("$repo/maped/MapedStatus.pm", "$tmp/MapedStatus.pm") or die $!;
 mkdir "$tmp/state";
 my $live = readfile("$repo/tests/fixtures/dhcp6leasectl.txt");
 $live =~ s/lease 7 days/lease-seconds: 60/;
@@ -49,12 +51,16 @@ my %conf = (WAN_IF => 'pppoe0', LEASE_IF => 'pppoe0', GIF_IF => 'gif0',
     MAPED_UP => "$tmp/up", MAPED_DOWN => "$tmp/down", MAPED_DERIVE => "$repo/maped/maped-derive",
     DHCP6LEASECTL => "$tmp/ctl", IFCONFIG => "$tmp/ifconfig", PFCTL => "$tmp/pfctl", ROUTE => "$tmp/route");
 writefile("$tmp/conf", config_text(\%conf));
+sub status { decode_json(readfile("$tmp/state/status.json")) }
 sub once {
 	return command(10, 65536, $^X, "$tmp/maped", '-1', '-f', '-p', "$tmp/conf");
 }
 my ($rc, $out) = once();
 is($rc, 0, 'one-shot configures current live lease') or diag $out;
 is(readfile("$tmp/calls"), "up\n", 'helper called once');
+is(status()->{status}, 'active', 'active status published');
+is(scalar @{status()->{record}}, 1, 'first allocation recorded');
+ok(status()->{'last-update'}, 'timestamp published');
 ok(-f "$tmp/state/applied.conf", 'ownership recorded');
 ($rc, $out) = once();
 is($rc, 0, 'unchanged healthy state succeeds') or diag $out;
@@ -79,12 +85,26 @@ is(readfile("$tmp/gif_mtu"), "1460\n", 'auto MTU recomputed');
 writefile("$tmp/wan_mtu", "1492\n");
 ($rc, $out) = once();
 is($rc, 0, 'WAN MTU restored') or diag $out;
+(my $changed = $live) =~ s/psid 42/psid 43/;
+writefile("$tmp/live", $changed);
+($rc, $out) = once();
+is($rc, 0, 'changed PSID applied') or diag $out;
+is(status()->{port_set}{psid}, 43, 'port status changes with provisioning');
+is(scalar @{status()->{record}}, 2, 'changed provisioning appended to history');
+writefile("$tmp/live", $live);
+($rc, $out) = once();
+is($rc, 0, 'original PSID restored') or diag $out;
+is(status()->{port_set}{psid}, 42, 'restored allocation is current');
+is(scalar @{status()->{record}}, 3, 'return to old provisioning recorded');
 writefile("$tmp/calls", "up\n");
 writefile("$tmp/live", "pppoe0 [Init]\n");
 ($rc, $out) = once();
 is($rc, 0, 'confirmed withdrawal succeeds') or diag $out;
 is(readfile("$tmp/calls"), "up\ndown\n", 'withdrawal invokes down helper');
 ok(!-f "$tmp/state/applied.conf", 'ownership removed after cleanup');
+is(status()->{status}, 'inactive', 'withdrawal clears active status');
+ok(!defined status()->{port_set}, 'withdrawal clears usable ports');
+is(scalar @{status()->{record}}, 3, 'history survives renewals and withdrawal');
 writefile("$tmp/live", $live);
 ($rc, $out) = once();
 is($rc, 0, 'new live lease reapplied') or diag $out;
@@ -97,6 +117,7 @@ writefile("$tmp/up", "#!/bin/sh\nexit 3\n");
 ($rc, $out) = once();
 ok($rc != 0, 'failed apply returns failure');
 ok(!-f "$tmp/state/applied.conf", 'partial apply retired');
+isnt(status()->{status}, 'active', 'failed apply never advertised active');
 
 writefile("$tmp/up", "#!/bin/sh\necho up >> '$tmp/calls'\n");
 writefile("$tmp/calls", '');
@@ -116,8 +137,10 @@ is(readfile("$tmp/calls"), "up\n", 'continuous daemon configured');
 writefile("$tmp/fail", '');
 sleep 1.2;
 is(readfile("$tmp/calls"), "up\n", 'read failure retains still-valid service');
+is(status()->{status}, 'degraded', 'temporary query failure reported');
 sleep 3.5;
 like(readfile("$tmp/calls"), qr/up\ndown\n/, 'read failure cannot extend confirmed expiry');
+is(status()->{status}, 'inactive', 'expired status invalidated');
 kill 'TERM', $pid;
 waitpid($pid, 0);
 

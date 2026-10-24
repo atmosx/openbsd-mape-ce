@@ -157,6 +157,40 @@ Reserve the configured GIF interface and the mape PF anchor for this daemon.
 Cleanup deletes the default route only when it still belongs to the recorded
 tunnel, and removes the CE alias only when maped originally added it.
 Legacy lease.state files alone are not ownership records.
+.Sh STATUS AND HISTORY
+.Nm
+atomically publishes
+.Pa status.json
+in
+.Va MAPED_STATE_DIR
+(default
+.Pa /var/db/maped )
+on each reconciliation cycle and during application and withdrawal.
+The file uses base Perl's JSON::PP and requires no additional packages.
+It is root-readable and is not used to authorize service or establish ownership.
+.Pp
+Schema version 1 includes a UTC
+.Cm last-update
+field, current status, live confirmation and estimated expiry timestamps,
+the applied IPv4 address, CE and BR IPv6 addresses, delegated prefix,
+and all inclusive TCP/UDP port ranges.
+Only active or temporarily degraded service advertises an allocation.
+Consumers must check freshness: a stopped daemon or failed write can leave an
+old file behind, including after a one-shot invocation.
+.Pp
+The persistent
+.Cm record
+array records successfully applied allocation changes, including PSID-only
+changes, with UTC
+.Cm first-seen
+and
+.Cm last-seen
+observation dates.
+Unchanged healthy observations update the last record instead of appending.
+History survives restart and withdrawal, is not automatically pruned, and
+cannot reconstruct changes while the daemon was stopped.
+These dates are observations, not exact ISP assignment times.
+Invalid history stops startup rather than silently discarding records.
 .Sh FILES
 .Bl -tag -width /usr/local/libexec/maped/maped-derive -compact
 .It Pa /etc/maped.conf
@@ -171,6 +205,8 @@ Runtime configuration helper.
 Runtime teardown helper.
 .It Pa /usr/local/libexec/maped/maped-derive
 MAP-E parameter derivation helper.
+.It Pa /var/db/maped/status.json
+Atomic JSON status and persistent allocation history (mode 0600).
 .It Pa /var/db/maped/lease.state
 Default lease state cache.
 .It Pa /etc/pf.anchors/mape
