@@ -154,7 +154,7 @@ mape_rule	: MAPERULE NUMBER NUMBER STRING NUMBER STRING NUMBER {
 				    $5);
 				goto err;
 			}
-			if ($7 < 0 || $7 > 128) {
+			if ($7 < 0 || $7 > 128 || $7 + $3 > 128) {
 				yyerror("invalid MAP-E IPv6 prefix length %lld",
 				    $7);
 				goto err;
