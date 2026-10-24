@@ -131,11 +131,7 @@ pf_get_sport(struct pf_pdesc *pd, struct pf_rule *r,
 {
 	u_int16_t low, high;
 
-	low = r->nat.proxy_port[0];
-	high = r->nat.proxy_port[1];
-
-
-	if (r->nat.mape.offset) {
+	if (r->nat.mape.psidlen) {
 		if (pf_get_sport_mape(pd, r, naddr, nport, sn)) {
 			DPFPRINTF(LOG_NOTICE,
 			    "pf: MAP-E port allocation (%u/%u/%u) failed",
@@ -143,10 +139,15 @@ pf_get_sport(struct pf_pdesc *pd, struct pf_rule *r,
 			    r->nat.mape.psid);
 			return (-1);
 		}
-	} else if (pf_get_sport_range(pd, r, naddr, nport, low, high, sn)) {
-		DPFPRINTF(LOG_NOTICE,
-		    "pf: NAT proxy port allocation (%u-%u) failed", low, high);
-		return (-1);
+	} else {
+		low = r->nat.proxy_port[0];
+		high = r->nat.proxy_port[1];
+		if (pf_get_sport_range(pd, r, naddr, nport, low, high, sn)) {
+			DPFPRINTF(LOG_NOTICE,
+			    "pf: NAT proxy port allocation (%u-%u) failed",
+			    low, high);
+			return (-1);
+		}
 	}
 	return (0);
 }
@@ -172,7 +173,7 @@ pf_get_sport_range(struct pf_pdesc *pd, struct pf_rule *r,
 	if (pd->proto == IPPROTO_ICMP) {
 		if (pd->ndport != htons(ICMP_ECHO))
 			return (0);
-		if (!r->nat.mape.offset) {
+		if (!r->nat.mape.psidlen) {
 			low = 1;
 			high = 65535;
 		}
@@ -181,7 +182,7 @@ pf_get_sport_range(struct pf_pdesc *pd, struct pf_rule *r,
 	if (pd->proto == IPPROTO_ICMPV6) {
 		if (pd->ndport != htons(ICMP6_ECHO_REQUEST))
 			return (0);
-		if (!r->nat.mape.offset) {
+		if (!r->nat.mape.psidlen) {
 			low = 1;
 			high = 65535;
 		}
@@ -298,6 +299,15 @@ pf_get_sport_mape(struct pf_pdesc *pd, struct pf_rule *r,
 	psmask = r->nat.mape.psid & ((1U << r->nat.mape.psidlen) - 1);
 	psmask = psmask << psidshift;
 	highmask = (1U << psidshift) - 1;
+
+	if (r->nat.mape.offset == 0) {
+		high = psmask | highmask;
+		if (high == 0)
+			return (1);
+		low = psmask ? psmask : 1;
+		return (pf_get_sport_range(pd, r, naddr, nport, low, high,
+		    sn) != 0);
+	}
 
 	alow = 1;
 	ahigh = (1U << r->nat.mape.offset) - 1;

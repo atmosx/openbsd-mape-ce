@@ -4051,9 +4051,9 @@ pf_chk_limiter_action(int limiter_action)
 int
 pf_mape_validate(struct pf_mape_port *mape)
 {
-	if (mape->offset == 0)
-		return (mape->psidlen != 0 || mape->psid != 0 ? EINVAL : 0);
-	if (mape->offset > 15 || mape->psidlen == 0 ||
+	if (mape->psidlen == 0)
+		return (mape->offset != 0 || mape->psid != 0 ? EINVAL : 0);
+	if (mape->offset > 15 ||
 	    mape->psidlen > 16 - mape->offset ||
 	    mape->psid >= (1U << mape->psidlen))
 		return (EINVAL);

@@ -1,6 +1,6 @@
 stdin:1: map-e-portset cannot be redefined
-stdin:2: MAP-E PSID offset must be 1-15: 0
-stdin:3: MAP-E PSID offset must be 1-15: 16
+stdin:2: MAP-E PSID offset must be 0-15: -1
+stdin:3: MAP-E PSID offset must be 0-15: 16
 stdin:4: invalid MAP-E PSID length: 10
 stdin:5: invalid MAP-E PSID: -1
 stdin:6: invalid MAP-E PSID: 1024
