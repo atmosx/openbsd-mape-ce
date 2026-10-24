@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Test::More;
 use FindBin;
-use lib "$FindBin::Bin/../maped";
+use lib "$FindBin::Bin/../lib";
 use MapedPublish;
 sub service { +{name => $_[0], protocol => $_[1] || 'tcp', target_address => '127.0.0.1', target_port => 80} }
 sub parse { MapedPublish::services(MapedPublish::encode({services => $_[0]})) }
@@ -36,8 +36,8 @@ like(MapedPublish::rules($p), qr/from <trusted>/, 'source table remains restrict
 $e->[0]{external_port} = 80;
 $p->{MAPED_PUBLISH_JSON} = MapedPublish::encode($e);
 eval { MapedPublish::rules($p) }; like($@, qr/invalid published assignment/, 'renderer rechecks authorization');
-my $example = MapedPublish::load("$FindBin::Bin/../examples/maped-publish.json");
-open my $fh, '<', "$FindBin::Bin/../examples/maped-published-endpoints.json" or die $!;
+my $example = MapedPublish::load("$FindBin::Bin/../../examples/maped-publish.json");
+open my $fh, '<', "$FindBin::Bin/../../examples/maped-published-endpoints.json" or die $!;
 my $published_example = do { local $/; JSON::PP::decode_json(<$fh>) };
 close $fh;
 is_deeply(MapedPublish::assign($example, $p, []), $published_example, 'documented service and published JSON examples agree');

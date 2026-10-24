@@ -3,7 +3,7 @@ use warnings;
 use Test::More;
 use FindBin;
 use File::Temp qw(tempfile);
-use lib "$FindBin::Bin/../maped";
+use lib "$FindBin::Bin/../lib";
 use Maped qw(command status_text parse_lease complete_lease lease_text derive_mape parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 my ($rc, $out) = command(2, 1024, $^X, '-e', 'print "ok"');
 is($rc, 0, 'successful child');
@@ -49,7 +49,7 @@ print {$snapshot} $base . "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 48\n";
 close $snapshot;
 {
 	local $ENV{MAPED_SNAPSHOT} = $snapshot_path;
-	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../maped/maped-derive");
+	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../bin/maped-derive");
 	isnt($rc, 0, 'reject PD shorter than rule prefix plus EA length');
 	like($out, qr/omits PSID bits/, 'underlength PD diagnostic');
 }
@@ -59,7 +59,7 @@ print {$snapshot} $base . "mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 48\n" .
 close $snapshot;
 {
 	local $ENV{MAPED_SNAPSHOT} = $snapshot_path;
-	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../maped/maped-derive");
+	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../bin/maped-derive");
 	is($rc, 0, 'explicit PSID supplies missing EA bits');
 	like($out, qr/CE_IPV6='[^']*:2a'\n/, 'CE IID uses the provisioned PSID');
 }
@@ -70,7 +70,7 @@ print {$snapshot} "ia_pd 0 2001:db8:100:: 52\nmape_br 2001:db8::1\n" .
 close $snapshot;
 {
 	local $ENV{MAPED_SNAPSHOT} = $snapshot_path;
-	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../maped/maped-derive");
+	($rc, $out) = command(5, 4096, $^X, "$FindBin::Bin/../bin/maped-derive");
 	isnt($rc, 0, 'reject PD that omits IPv4 suffix even with explicit PSID');
 	like($out, qr/does not contain the MAP IPv4 suffix/, 'missing suffix diagnostic');
 }

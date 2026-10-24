@@ -27,20 +27,14 @@ jobs:
           persist-credentials: false
 
       # Portable tests use core Perl, POSIX sh, mocked networking tools, and
-      # extracted C harnesses from src/. OpenBSD-only sandbox checks are skipped.
+      # extracted C harnesses from openbsd/src/. OpenBSD-only sandbox checks are skipped.
       - name: Run maped Perl, helper, metrics, and PF tests
         id: tests
         shell: bash
         run: |
           set -euo pipefail
           {
-            prove -v tests/maped*.t
-            sh tests/maped-down-test.sh
-            sh tests/maped-up-test.sh
-            sh tests/run.sh
-            sh tests/metrics-run.sh
-            CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
-              make pf-test OPENBSD_SRC="$PWD/src"
+            CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" make test
           } 2>&1 | tee "$RUNNER_TEMP/maped-perl-tests.log"
 
       - name: Verify OpenBSD 7.9 patches against local baseline
@@ -56,17 +50,17 @@ jobs:
             git show 76ec8f4 -- patch/pf-map-e-ce/mape79.patch | \
               awk '/^\+--- a\/sys\/net\/pf_ioctl\.c/{p=1} p{sub(/^\+/,""); print}' | \
               patch -R -p1 -d "$tmp/src"
-            patch -p1 --fuzz=0 -d "$tmp/src" < patch/pf-map-e-ce/mape79.patch
-            patch -p1 --fuzz=0 -d "$tmp/src" < patch/dhcp6leased-mape-softwire46-openbsd79.patch
-            diff -ru "$tmp/src" src
-            for p in patch/pf-map-e-ce/mape79.patch patch/dhcp6leased-mape-softwire46-openbsd79.patch; do
+            patch -p1 --fuzz=0 -d "$tmp/src" < openbsd/patches/7.9/pf-map-e-ce/mape79.patch
+            patch -p1 --fuzz=0 -d "$tmp/src" < openbsd/patches/7.9/dhcp6leased-mape-softwire46-openbsd79.patch
+            diff -ru "$tmp/src" openbsd/src
+            for p in openbsd/patches/7.9/pf-map-e-ce/mape79.patch openbsd/patches/7.9/dhcp6leased-mape-softwire46-openbsd79.patch; do
               sum=$(sha256sum "$p" | awk '{print $1}')
-              grep -Fq "$sum  $p" tests/OPENBSD79.md || {
-                echo "Checksum mismatch in tests/OPENBSD79.md for $p (got $sum)" >&2
+              grep -Fq "$sum  $p" openbsd/tests/OPENBSD79.md || {
+                echo "Checksum mismatch in openbsd/tests/OPENBSD79.md for $p (got $sum)" >&2
                 exit 1
               }
             done
-            echo "ok - OpenBSD 7.9 patches apply cleanly to local baseline and match src/ and tests/OPENBSD79.md"
+            echo "ok - OpenBSD 7.9 patches apply cleanly to local baseline and match openbsd/src/ and openbsd/tests/OPENBSD79.md"
           } 2>&1 | tee -a "$RUNNER_TEMP/maped-perl-tests.log"
 
       - name: Verify OpenBSD 7.9 patches against latest OPENBSD_7_9 CVS
@@ -95,7 +89,7 @@ jobs:
               awk '
                 /^--- a\// { f = substr($2, 3) }
                 /^@@ -[1-9]/ && f != "" { print "src/" f; f = "" }
-              ' patch/pf-map-e-ce/mape79.patch patch/dhcp6leased-mape-softwire46-openbsd79.patch
+              ' openbsd/patches/7.9/pf-map-e-ce/mape79.patch openbsd/patches/7.9/dhcp6leased-mape-softwire46-openbsd79.patch
             )
             fetched=0
             for mirror in \
@@ -113,8 +107,8 @@ jobs:
               echo "Failed to check out OPENBSD_7_9 sources from OpenBSD anoncvs mirrors" >&2
               exit 1
             fi
-            patch -p1 --fuzz=0 -d "$tmp/src" < patch/pf-map-e-ce/mape79.patch
-            patch -p1 --fuzz=0 -d "$tmp/src" < patch/dhcp6leased-mape-softwire46-openbsd79.patch
+            patch -p1 --fuzz=0 -d "$tmp/src" < openbsd/patches/7.9/pf-map-e-ce/mape79.patch
+            patch -p1 --fuzz=0 -d "$tmp/src" < openbsd/patches/7.9/dhcp6leased-mape-softwire46-openbsd79.patch
             CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
               make pf-test OPENBSD_SRC="$tmp/src"
             echo "ok - OpenBSD 7.9 patches apply cleanly to latest OPENBSD_7_9 CVS and pass pf-test"
@@ -132,7 +126,7 @@ jobs:
             echo "- Local baseline patch & checksum verification: \`${{ steps.patches.outcome }}\`"
             echo "- Latest \`OPENBSD_7_9\` CVS patch verification: \`${{ steps.cvs_patches.outcome }}\`"
             echo
-            echo 'Run `make test` and `make pf-test OPENBSD_SRC=src` locally to reproduce.'
+            echo 'Run `make test` and `make pf-test OPENBSD_SRC=openbsd/src` locally to reproduce.'
             echo 'The full test output is available in the workflow step and the `maped-perl-test-log` artifact.'
           } >> "$GITHUB_STEP_SUMMARY"
 

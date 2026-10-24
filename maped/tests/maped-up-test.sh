@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run the real helper with mocked networking commands; no root is needed.
 set -eu
-repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/maped-up-tests.XXXXXXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
@@ -73,7 +73,7 @@ run()
 	: > "$tmp/calls"
 	rm -f "$tmp/anchor"
 	if env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
-	    WAN_TEST_MTU="$wan" sh "$repo/maped/maped-up" "$tmp/conf" \
+	    WAN_TEST_MTU="$wan" sh "$repo/maped/bin/maped-up" "$tmp/conf" \
 	    > "$tmp/output" 2>&1; then
 		[ "$expected" != fail ] || { echo "unexpected success: $wan $setting"; exit 1; }
 		grep -qx "ifconfig gif0 mtu $expected" "$tmp/calls"
@@ -110,7 +110,7 @@ cp "$tmp/base.conf" "$tmp/conf"
 : > "$tmp/calls"
 if env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
     WAN_TEST_MTU=1492 ROUTE_TEST_IF=em0 ROUTE_TEST_GW=192.0.2.254 \
-    sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1; then
+    sh "$repo/maped/bin/maped-up" "$tmp/conf" > "$tmp/output" 2>&1; then
 	echo 'accepted an unrelated default route' >&2; exit 1
 fi
 [ ! -s "$tmp/calls" ]
@@ -120,7 +120,7 @@ touch "$tmp/route-state"
 env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
     WAN_TEST_MTU=1492 ROUTE_TEST_IF=gif0 ROUTE_TEST_GW=0.0.0.1 \
     ROUTE_STATE="$tmp/route-state" \
-    sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
+    sh "$repo/maped/bin/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
 grep -qx 'route delete -inet default -ifp gif0 0.0.0.1' "$tmp/calls"
 grep -qx 'route add -inet default -ifp gif0 0.0.0.1' "$tmp/calls"
 [ -f "$tmp/route-state" ]
@@ -132,7 +132,7 @@ n=$((n + 1)); echo "ok $n - delete owned route before interface destruction and 
 if env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
     WAN_TEST_MTU=1492 ROUTE_TEST_IF=gif0 ROUTE_TEST_GW=0.0.0.1 \
     ROUTE_STATE="$tmp/route-state" ROUTE_DELETE_FAIL=1 \
-    sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1; then
+    sh "$repo/maped/bin/maped-up" "$tmp/conf" > "$tmp/output" 2>&1; then
 	echo 'ignored owned route deletion failure' >&2; exit 1
 fi
 [ -f "$tmp/route-state" ]
@@ -151,7 +151,7 @@ MAPED_PUBLISH_JSON='[{"external_address":"192.0.2.1","external_port":1028,"name"
 EOF
 : > "$tmp/calls"
 env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" WAN_TEST_MTU=1492 \
-    sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
+    sh "$repo/maped/bin/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
 grep -q 'from <trusted> to 192.0.2.1 port 1028 rdr-to 127.0.0.1 port 8080' "$tmp/anchor"
 grep -q 'map-e-portset 6/8/1' "$tmp/anchor"
 grep -q 'max-mss 1412' "$tmp/anchor"
@@ -162,7 +162,7 @@ n=$((n + 1)); echo "ok $n - validate and load complete publishing anchor"
 for fail in -nf -f; do
     : > "$tmp/calls"
     if env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" WAN_TEST_MTU=1492 PF_FAIL="$fail" \
-        sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1; then
+        sh "$repo/maped/bin/maped-up" "$tmp/conf" > "$tmp/output" 2>&1; then
         echo "ignored PF failure $fail" >&2; exit 1
     fi
     if [ "$fail" = -nf ] && grep -q '^pfctl -a mape -f ' "$tmp/calls"; then
@@ -174,7 +174,7 @@ done
 cp "$tmp/base.conf" "$tmp/conf"
 : > "$tmp/calls"
 env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" WAN_TEST_MTU=1492 \
-    TEST_PSID_LEN=0 TEST_PSID=0 sh "$repo/maped/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
+    TEST_PSID_LEN=0 TEST_PSID=0 sh "$repo/maped/bin/maped-up" "$tmp/conf" > "$tmp/output" 2>&1
 grep -qx 'match out on gif0 inet from (gif0) to any nat-to (gif0)' "$tmp/anchor"
 grep -qx 'match out on gif0 inet from 192.168.1.0/24 to any nat-to (gif0)' "$tmp/anchor"
 ! grep -q 'map-e-portset' "$tmp/anchor"

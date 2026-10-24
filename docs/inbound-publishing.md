@@ -80,8 +80,8 @@ revoking a client's access.
 
 ## Validation
 
-Run `make test` and `prove tests/maped-publish.t tests/maped-status.t
- tests/maped-daemon.t` for portable and mocked integration coverage.
+Run `make test` and `prove maped/tests/maped-publish.t maped/tests/maped-status.t
+ maped/tests/maped-daemon.t` for portable and mocked integration coverage.
 On a patched OpenBSD router, also validate/load the generated anchor, exercise
 TCP and UDP from an external network, test source-table restrictions, and
 confirm withdrawal/reallocation. Portable mocks do not validate kernel PF

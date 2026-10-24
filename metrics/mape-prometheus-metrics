@@ -82,8 +82,8 @@ if [ -r "$CONF" ]; then
 	MAPED_CONFIG="${MAPED_CONFIG:-/usr/local/libexec/maped/maped-config}"
 	if [ ! -x "$MAPED_CONFIG" ] && [ -x "$SCRIPT_DIR/../libexec/maped/maped-config" ]; then
 		MAPED_CONFIG="$SCRIPT_DIR/../libexec/maped/maped-config"
-	elif [ ! -x "$MAPED_CONFIG" ] && [ -x "$SCRIPT_DIR/../maped/maped-config" ]; then
-		MAPED_CONFIG="$SCRIPT_DIR/../maped/maped-config"
+	elif [ ! -x "$MAPED_CONFIG" ] && [ -x "$SCRIPT_DIR/../maped/bin/maped-config" ]; then
+		MAPED_CONFIG="$SCRIPT_DIR/../maped/bin/maped-config"
 	fi
 	CONFIG_TEXT=$("$MAPED_CONFIG" "$CONF")
 	eval "$CONFIG_TEXT"

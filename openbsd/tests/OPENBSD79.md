@@ -61,7 +61,7 @@ PSID length. Upstream case 115 is preserved.
 ## Validation evidence (`vm02`, OpenBSD 7.9 arm64)
 
 - Both 7.9 patches apply to a pristine `OPENBSD_7_9` source tree without
-  fuzz, offsets, or rejected hunks and match `src/` byte-for-byte.
+  fuzz, offsets, or rejected hunks and match `openbsd/src/` byte-for-byte.
 - `pfctl`, `dhcp6leased`, and `dhcp6leasectl` build cleanly against the patched
   headers, and `pf_lb.o` and `pf_ioctl.o` compile in the `arm64 GENERIC.MP`
   kernel build configuration with `-Werror`.
@@ -75,8 +75,8 @@ PSID length. Upstream case 115 is preserved.
 Current patch SHA256 values (updated when patches change):
 
 ```text
-d752235ecad392468c9c5720049c87455ebacd38086a615742ff88e33b35da25  patch/pf-map-e-ce/mape79.patch
-07bc1cf6381cfd9068f860e6994ba4d23ff2eb21714b7b3d8862c284a89ce8eb  patch/dhcp6leased-mape-softwire46-openbsd79.patch
+d752235ecad392468c9c5720049c87455ebacd38086a615742ff88e33b35da25  openbsd/patches/7.9/pf-map-e-ce/mape79.patch
+07bc1cf6381cfd9068f860e6994ba4d23ff2eb21714b7b3d8862c284a89ce8eb  openbsd/patches/7.9/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
 ## Deployment gate

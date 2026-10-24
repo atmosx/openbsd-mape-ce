@@ -209,16 +209,16 @@ doas /usr/bin/perl -MJSON::PP -0777 -ne '
 
 ## Tests and deployment
 
-`tests/maped-status.t` tests the calculator, range boundaries, invalid inputs,
+`maped/tests/maped-status.t` tests the calculator, range boundaries, invalid inputs,
 UTC timestamps, history transitions, restart preservation, malformed history,
-permissions, and atomic-write failure cleanup. `tests/maped-daemon.t` uses mocked
+permissions, and atomic-write failure cleanup. `maped/tests/maped-daemon.t` uses mocked
 networking commands to check integration with active/no-op cycles, PSID changes,
 withdrawal, failed application, transient query failures, and expiry.
 
 Run `make test` and, for strict TAP failure checking:
 
 ```sh
-prove tests/maped-publish.t tests/maped-status.t tests/maped-daemon.t
+prove maped/tests/maped-publish.t maped/tests/maped-status.t maped/tests/maped-daemon.t
 ```
 
 Install all helpers and modules, including `MapedStatus.pm` and `MapedPublish.pm`,

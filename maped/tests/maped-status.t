@@ -4,7 +4,7 @@ use Test::More;
 use File::Temp qw(tempdir);
 use JSON::PP qw(decode_json);
 use FindBin;
-use lib "$FindBin::Bin/../maped";
+use lib "$FindBin::Bin/../lib";
 use MapedStatus;
 
 my $set = MapedStatus::port_set(6, 6, 63);

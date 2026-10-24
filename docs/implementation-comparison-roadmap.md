@@ -55,16 +55,16 @@ only to that snapshot, not all supported releases or future HEAD.
 
 ### Local baseline
 
-- [OpenBSD validation evidence and deployment gate](../tests/OPENBSD79.md)
-- [PF patch](../patch/pf-map-e-ce/mape79.patch)
-- [PF patch provenance](../patch/pf-map-e-ce/REPO.md)
-- [DHCPv6 patch](../patch/dhcp6leased-mape-softwire46-openbsd79.patch)
-- [Daemon manual](../maped/maped.8)
-- [Lease parsing and runtime checks](../maped/Maped.pm)
-- [Parameter derivation](../maped/maped-derive)
-- [Setup](../maped/maped-up) and [withdrawal](../maped/maped-down)
-- [Extracted allocator tests](../tests/pf-nat-test.sh)
-- [Extracted kernel-validator tests](../tests/pf-mape-validate-test.sh)
+- [OpenBSD validation evidence and deployment gate](../openbsd/tests/OPENBSD79.md)
+- [PF patch](../openbsd/patches/7.9/pf-map-e-ce/mape79.patch)
+- [PF patch provenance](../openbsd/patches/pf-map-e-ce/REPO.md)
+- [DHCPv6 patch](../openbsd/patches/7.9/dhcp6leased-mape-softwire46-openbsd79.patch)
+- [Daemon manual](../maped/man/maped.8)
+- [Lease parsing and runtime checks](../maped/lib/Maped.pm)
+- [Parameter derivation](../maped/bin/maped-derive)
+- [Setup](../maped/bin/maped-up) and [withdrawal](../maped/bin/maped-down)
+- [Extracted allocator tests](../openbsd/tests/pf-nat-test.sh)
+- [Extracted kernel-validator tests](../openbsd/tests/pf-mape-validate-test.sh)
 
 Local links describe the working repository and may change. Record the local
 commit, patch checksums, kernel version, and userland versions with future
@@ -306,7 +306,7 @@ Do not copy FreeBSD's Netlink or libpfctl architecture into OpenBSD.
 
 **Observed:** current FreeBSD hashes `mape.offset`, `mape.psidlen`, and
 `mape.psid` explicitly, using canonical byte order for the PSID. The local
-`pf_hash_rule()` in `src/sys/net/pf_ioctl.c` does not include these MAP fields.
+`pf_hash_rule()` in `openbsd/src/sys/net/pf_ioctl.c` does not include these MAP fields.
 
 **Status:** audit opportunity, not a demonstrated OpenBSD defect. The local
 hash also omits other translation details, and checksum/anchor semantics must
@@ -371,7 +371,7 @@ For each completed task, record:
 - Result classification: passed, failed, inconclusive, or source inspection only.
 - Remaining limitations and any upstream issue/report link.
 
-Update [the deployment gate](../tests/OPENBSD79.md) only when its actual live
+Update [the deployment gate](../openbsd/tests/OPENBSD79.md) only when its actual live
 requirements have been satisfied. Compilation, stubbed tests, and source
 comparison are not substitutes for packet-path evidence.
 

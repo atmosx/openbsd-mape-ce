@@ -5,6 +5,41 @@ Mapping of Address and Port with Encapsulation (MAP-E CE,
 [RFC 7597](https://datatracker.ietf.org/doc/html/rfc7597)) support to
 [OpenBSD](https://www.openbsd.org/) 7.9.
 
+## Repository layout
+
+The OpenBSD patches and the `maped` companion app are maintained together,
+with separate component tests and installation targets:
+
+```text
+openbsd/
+  patches/7.8/    Historical 7.8 patches and split DHCPv6 patches
+  patches/7.9/    Current 7.9 PF and DHCPv6 patches
+  src/           Patched OpenBSD 7.9 source snapshots and native regressions
+  tests/         Portable PF harnesses and OpenBSD validation procedure
+maped/
+  bin/           Daemon and helper executables
+  lib/           Perl modules
+  etc/           Configuration and rc.d service script
+  man/           maped(8) manual
+  tests/         Unit tests, mocked integration tests, and fixtures
+metrics/         Optional Prometheus exporter, dashboard, and tests
+examples/        Complete deployment examples
+docs/            Shared architecture and operational documentation
+```
+
+Run `make test` from the repository root for all portable component tests.
+Individual suites are available with `make -C maped test`,
+`make -C metrics test`, and `make -C openbsd test`. The PF suite uses the
+bundled source snapshot by default; use `make pf-test OPENBSD_SRC=/usr/src`
+to test a patched system source tree instead. Native OpenBSD validation is
+covered in [the validation guide](openbsd/tests/OPENBSD79.md).
+
+`make install` (or `make -C maped install`) installs only maped; the optional
+exporter uses `make metrics-install` (or `make -C metrics install`). Installed
+paths remain unchanged. Applying patches and rebuilding OpenBSD is a separate,
+manual operation described below. Release tags `v7.8` and `v7.9` preserve their
+original release snapshots.
+
 ## How it works
 
 MAP-E ([RFC 7597](https://datatracker.ietf.org/doc/html/rfc7597)) carries IPv4
@@ -128,8 +163,8 @@ doas mkdir -p /usr/local/src
 cd /usr/local/src
 doas git clone https://github.com/atmosx/openbsd-mape-ce
 cd /usr/src
-doas patch -p1 < /usr/local/src/openbsd-mape-ce/patch/pf-map-e-ce/mape79.patch
-doas patch -p1 < /usr/local/src/openbsd-mape-ce/patch/dhcp6leased-mape-softwire46-openbsd79.patch
+doas patch -p1 < /usr/local/src/openbsd-mape-ce/openbsd/patches/7.9/pf-map-e-ce/mape79.patch
+doas patch -p1 < /usr/local/src/openbsd-mape-ce/openbsd/patches/7.9/dhcp6leased-mape-softwire46-openbsd79.patch
 ```
 
 ## 3. Build the kernel and userland tools

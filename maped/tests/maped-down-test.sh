@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/maped-down-tests.XXXXXXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
@@ -48,7 +48,7 @@ EOF
 	: > "$tmp/calls"
 	env -i PATH="$tmp/bin:/usr/bin:/bin" CALLS="$tmp/calls" \
 	    TUNNEL_SOURCE="$source" ROUTE_IF="$route_if" ROUTE_GW="$route_gw" \
-	    sh "$repo/maped/maped-down" "$tmp/conf" > /dev/null
+	    sh "$repo/maped/bin/maped-down" "$tmp/conf" > /dev/null
 	if [ "$source" = 2001:db8::1 ]; then
 		grep -qx 'ifconfig gif0 destroy' "$tmp/calls"
 	else

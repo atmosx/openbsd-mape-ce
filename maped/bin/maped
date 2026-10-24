@@ -18,7 +18,7 @@ use strict;
 use warnings;
 use Getopt::Std;
 use FindBin;
-use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
+use lib "$FindBin::Bin/../lib", "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
 use Maped qw(command status_text parse_lease complete_lease lease_text derive_mape parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 use MapedStatus;
 use MapedPublish;

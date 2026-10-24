@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-fixtures="$repo/tests/fixtures"
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+fixtures="$repo/maped/tests/fixtures"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/maped-tests.XXXXXXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
@@ -47,7 +47,7 @@ run_derive_from_lease_file()
 	out="$tmp/derive-lease-file.out"
 	env -i PATH="${PATH:-/bin:/usr/bin}" \
 	    LEASE_FILE="$fixtures/lease-file.txt" \
-	    perl "$repo/maped/maped-derive" > "$out"
+	    perl "$repo/maped/bin/maped-derive" > "$out"
 	compare "maped-derive parses dhcp6leased lease file" \
 	    "$fixtures/derive.expected" "$out"
 }
@@ -66,7 +66,7 @@ EOF
 	env -i PATH="${PATH:-/bin:/usr/bin}" \
 	    LEASE_IF=pppoe0 \
 	    DHCP6LEASECTL="$cmd" \
-	    perl "$repo/maped/maped-derive" > "$out"
+	    perl "$repo/maped/bin/maped-derive" > "$out"
 	compare "maped-derive parses dhcp6leasectl output" \
 	    "$fixtures/derive.expected" "$out"
 }
@@ -76,7 +76,7 @@ run_derive_from_zero_psid_lease()
 	out="$tmp/derive-zero-psid.out"
 	env -i PATH="${PATH:-/bin:/usr/bin}" \
 	    LEASE_FILE="$fixtures/cosmote-like-zero-psid.txt" \
-	    perl "$repo/maped/maped-derive" > "$out"
+	    perl "$repo/maped/bin/maped-derive" > "$out"
 	compare "maped-derive handles zero-length DHCP PSID" \
 	    "$fixtures/cosmote-like-zero-psid.expected" "$out"
 }

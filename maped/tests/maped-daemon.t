@@ -8,9 +8,9 @@ use Time::HiRes qw(sleep time);
 use File::Temp qw(tempdir);
 use File::Copy qw(copy);
 use FindBin;
-use lib "$FindBin::Bin/../maped";
+use lib "$FindBin::Bin/../lib";
 use Maped qw(command config_text);
-my $repo = "$FindBin::Bin/..";
+my $repo = "$FindBin::Bin/../..";
 my $tmp = tempdir(CLEANUP => 1);
 sub readfile {
 	open my $fh, '<', $_[0] or die "$_[0]: $!";
@@ -20,23 +20,23 @@ sub writefile {
 	open my $fh, '>', $_[0] or die "$_[0]: $!";
 	print {$fh} $_[1]; close $fh or die $!;
 }
-my $code = readfile("$repo/maped/maped");
+my $code = readfile("$repo/maped/bin/maped");
 my $n = ($code =~ s/if \(\$> != 0\) \{.*?^\}//ms);
 is($n, 1, 'remove only root admission in temporary test copy');
 $n = ($code =~ s/\$state_stat\[4\] != 0/\$state_stat[4] != \$>/);
 is($n, 1, 'test state directory owned by test UID');
 writefile("$tmp/maped", $code);
-copy("$repo/maped/Maped.pm", "$tmp/Maped.pm") or die $!;
-copy("$repo/maped/MapedPublish.pm", "$tmp/MapedPublish.pm") or die $!;
-copy("$repo/maped/MapedStatus.pm", "$tmp/MapedStatus.pm") or die $!;
+copy("$repo/maped/lib/Maped.pm", "$tmp/Maped.pm") or die $!;
+copy("$repo/maped/lib/MapedPublish.pm", "$tmp/MapedPublish.pm") or die $!;
+copy("$repo/maped/lib/MapedStatus.pm", "$tmp/MapedStatus.pm") or die $!;
 mkdir "$tmp/state";
-my $live = readfile("$repo/tests/fixtures/dhcp6leasectl.txt");
+my $live = readfile("$repo/maped/tests/fixtures/dhcp6leasectl.txt");
 $live =~ s/lease 7 days/lease-seconds: 60/;
 writefile("$tmp/live", $live);
 for my $name (qw(ctl up down ifconfig pfctl route)) {
 	my $body = {
 	    ctl => "[ ! -f '$tmp/fail' ] || exit 1\ncat '$tmp/live'\n",
-	    up => "echo up >> '$tmp/calls'\ntest -s \"\$2\"\n. \"\$1\"\necho \"\$GIF_MTU\" > '$tmp/gif_mtu'\ntouch '$tmp/installed'\n'$repo/maped/maped-publish' \"\$1\" > '$tmp/publish-rules'\n",
+	    up => "echo up >> '$tmp/calls'\ntest -s \"\$2\"\n. \"\$1\"\necho \"\$GIF_MTU\" > '$tmp/gif_mtu'\ntouch '$tmp/installed'\n'$repo/maped/bin/maped-publish' \"\$1\" > '$tmp/publish-rules'\n",
 	    down => "echo down >> '$tmp/calls'\nrm -f '$tmp/installed'\n",
 	    ifconfig => "case \"\$1\" in\npppoe0) echo \"pppoe0: flags=UP mtu \$(cat '$tmp/wan_mtu')\"; [ ! -f '$tmp/installed' ] || echo ' inet6 2001:db8:100:4200:0:c000:242:2a -->  prefixlen 128';;\n*) echo \"gif0: flags=<UP> mtu \$(cat '$tmp/gif_mtu')\"; echo ' tunnel: inet6 2001:db8:100:4200:0:c000:242:2a --> 2001:db8:ffff::1 ttl 64'; echo ' inet 192.0.2.66 --> 0.0.0.1 netmask 0xffffffff';;\nesac\n",
 	    pfctl => "echo 'match out on gif0 inet from any to any nat-to (gif0) map-e-portset 6/8/42'\necho \"match out on gif0 inet proto tcp flags S/SA scrub (max-mss \$((\$(cat '$tmp/gif_mtu') - 40)))\"\n[ ! -f '$tmp/publish-rules' ] || cat '$tmp/publish-rules'\n",
