@@ -1,0 +1,437 @@
+#!/usr/bin/perl
+#
+# Copyright (c) 2026 Panagiotis Atmatzidis <atma@convalesco.org>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+use strict;
+use warnings;
+use Getopt::Std;
+use File::Path qw(make_path);
+use POSIX qw(setsid strftime);
+use Sys::Syslog qw(:standard :macros);
+
+my @orig_argv = @ARGV;
+my %opt;
+getopts("1dfi:l:p", \%opt) or usage();
+
+my $once = $opt{"1"} ? 1 : 0;
+my $daemon = $opt{d} ? 1 : 0;
+my $foreground = $opt{f} ? 1 : 0;
+my $force_poll = $opt{p} ? 1 : 0;
+my $interval = defined $opt{i} ? $opt{i} : 30;
+my $log_level = lc($opt{l} // "");
+my $conf = $ARGV[0] || "/etc/maped.conf";
+
+usage() if $daemon && $foreground;
+usage() if $interval !~ /^\d+$/ || $interval < 1;
+
+if ($> != 0) {
+	exec "doas", $0, @orig_argv or die "maped: cannot exec doas: $!\n";
+}
+
+my %conf = read_conf($conf);
+my $state_dir = $conf{MAPED_STATE_DIR} || $conf{MAPE_STATE_DIR} || "/var/db/maped";
+my $state_file = $conf{MAPED_STATE_FILE} || $conf{MAPE_STATE_FILE} || "$state_dir/lease.state";
+my $maped_up = resolve_command($conf{MAPED_UP} || "/usr/local/libexec/maped/maped-up",
+    "/usr/local/libexec/maped/maped-up");
+my $dhcp6leasectl = resolve_command($conf{DHCP6LEASECTL} || "dhcp6leasectl",
+    "/usr/sbin/dhcp6leasectl");
+my $ifconfig = resolve_command($conf{IFCONFIG} || "ifconfig", "/sbin/ifconfig");
+my $pfctl = resolve_command($conf{PFCTL} || "pfctl", "/sbin/pfctl");
+my %log_rank = (debug => 0, info => 1, warn => 2);
+$log_level = lc($conf{MAPED_LOG_LEVEL} || $conf{MAPE_LOG_LEVEL} || "info") if $log_level eq "";
+usage() unless exists $log_rank{$log_level};
+my $have_kqueue = $force_poll ? 0 : load_kqueue();
+
+make_path($state_dir) unless -d $state_dir;
+
+if ($daemon) {
+	daemonize();
+	openlog("maped", "pid", LOG_DAEMON);
+	log_info(startup_message());
+} else {
+	openlog("maped", "pid,perror", LOG_DAEMON);
+}
+
+sandbox_parent();
+
+run_once();
+exit 0 if $once;
+
+while (1) {
+	wait_for_change();
+	run_once();
+}
+
+sub usage {
+	print STDERR "usage: maped [-1] [-d|-f] [-p] [-i seconds] [-l info|warn|debug] [config]\n";
+	exit 2;
+}
+
+sub startup_message {
+	my $backend = $have_kqueue && $conf{LEASE_FILE} ?
+	    "kqueue on $conf{LEASE_FILE}; health check every ${interval}s" :
+	    "polling every ${interval}s";
+	return "started; watching $conf with $backend";
+}
+
+sub daemonize {
+	chdir "/" or die "maped: chdir /: $!\n";
+	defined(my $pid = fork) or die "maped: fork: $!\n";
+	exit 0 if $pid;
+	setsid() or die "maped: setsid: $!\n";
+	defined($pid = fork) or die "maped: fork: $!\n";
+	exit 0 if $pid;
+
+	open STDIN, "<", "/dev/null" or die "maped: stdin: $!\n";
+	open STDOUT, ">", "/dev/null" or die "maped: stdout: $!\n";
+	open STDERR, ">", "/dev/null" or die "maped: stderr: $!\n";
+}
+
+sub read_conf {
+	my ($path) = @_;
+	my %c;
+
+	open my $fh, "<", $path or die "maped: cannot read $path: $!\n";
+	while (my $line = <$fh>) {
+		chomp $line;
+		$line =~ s/^\s+//;
+		$line =~ s/\s+$//;
+		next if $line eq "" || $line =~ /^#/;
+		next unless $line =~ /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
+		my ($key, $value) = ($1, $2);
+		$value =~ s/\s+#.*$//;
+		if ($value =~ /^"(.*)"$/ || $value =~ /^'(.*)'$/) {
+			$value = $1;
+		}
+		$c{$key} = $value;
+	}
+
+	return %c;
+}
+
+sub resolve_command {
+	my ($cmd, $fallback) = @_;
+	return $cmd if $cmd =~ m{/};
+	return $fallback if defined $fallback && -x $fallback;
+
+	for my $dir (split /:/, $ENV{PATH} || "/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/sbin:/usr/local/bin") {
+		my $path = "$dir/$cmd";
+		return $path if -x $path;
+	}
+
+	return $cmd;
+}
+
+sub sandbox_parent {
+	my $loaded = eval {
+		require OpenBSD::Pledge;
+		OpenBSD::Pledge->import(qw(pledge));
+		require OpenBSD::Unveil;
+		OpenBSD::Unveil->import(qw(unveil));
+		1;
+	};
+	if (!$loaded) {
+		chomp(my $err = $@ || "unknown error");
+		if ($^O eq "openbsd") {
+			log_warn("pledge/unveil unavailable; running without sandbox: $err");
+		} else {
+			log_debug("pledge/unveil unavailable; running without sandbox");
+		}
+		return;
+	}
+
+	for my $rule (sandbox_unveil_rules()) {
+		my ($path, $perms) = @$rule;
+		next if !defined $path || $path eq "" || $path !~ m{^/};
+		unveil($path, $perms) or die "maped: unveil $path: $!\n";
+	}
+	unveil() or die "maped: lock unveil: $!\n";
+	pledge(qw(rpath wpath cpath proc exec unix)) or die "maped: pledge: $!\n";
+	log_debug("pledge/unveil enabled for parent");
+}
+
+sub sandbox_unveil_rules {
+	my @rules = (
+	    ["/bin/sh", "x"],
+	    [$maped_up, "x"],
+	    [$ifconfig, "x"],
+	    [$pfctl, "x"],
+	    [$dhcp6leasectl, "x"],
+	    [$state_dir, "rwc"],
+	);
+
+	push @rules, [$conf, "r"] if $conf =~ m{^/};
+	push @rules, [dirname($conf{LEASE_FILE}), "r"]
+	    if $conf{LEASE_FILE} && $conf{LEASE_FILE} =~ m{^/};
+
+	return @rules;
+}
+
+sub dirname {
+	my ($path) = @_;
+	$path =~ s{/+[^/]*$}{};
+	return $path ne "" ? $path : "/";
+}
+
+sub run_once {
+	my $snapshot = lease_snapshot();
+	if (!complete_snapshot($snapshot)) {
+		log_warn("lease data incomplete; waiting");
+		return;
+	}
+
+	my $old = read_state();
+	my $runtime_reason = runtime_reconfigure_reason();
+	if (defined $runtime_reason && $runtime_reason =~ /^cannot run /) {
+		log_warn("MAP-E runtime health check failed: $runtime_reason");
+		return;
+	}
+	if (defined $old && $old eq $snapshot && !defined $runtime_reason) {
+		log_debug("lease data unchanged and MAP-E runtime looks healthy");
+		return;
+	}
+
+	if (!defined $old || $old ne $snapshot) {
+		log_info("MAP-E lease data changed; running $maped_up");
+		log_debug("new lease state:\n$snapshot");
+	} else {
+		log_info("MAP-E lease data unchanged but runtime needs repair: $runtime_reason");
+	}
+	my ($rc, $out) = run_command($maped_up, $conf);
+	if ($rc == 0) {
+		write_state($snapshot);
+		log_info("MAP-E reconfiguration complete");
+		log_debug("maped-up output:\n$out") if $out ne "";
+		return;
+	}
+
+	my $exit = $rc == -1 ? "exec failed" : "exit " . ($rc >> 8);
+	log_warn("MAP-E reconfiguration failed: $exit");
+	log_warn("maped-up output:\n$out") if $out ne "";
+}
+
+sub runtime_reconfigure_reason {
+	my $gif = $conf{GIF_IF} || "";
+	return "GIF_IF is not configured" if $gif eq "";
+
+	my ($if_rc, $ifconfig_out) = run_command($ifconfig, $gif);
+	return "cannot run $ifconfig $gif: $ifconfig_out" if $if_rc == -1;
+	return "$gif does not exist" if $if_rc != 0;
+	return "$gif is not UP" if $ifconfig_out !~ /\bUP\b/;
+
+	my ($pf_rc, $rules) = run_command($pfctl, "-a", "mape", "-sr");
+	return "cannot run $pfctl: $rules" if $pf_rc == -1;
+	return "cannot read pf anchor mape" if $pf_rc != 0;
+	return "pf anchor mape has no MAP-E portset rule" if $rules !~ /\bmap-e-portset\b/;
+
+	return undef;
+}
+
+sub load_kqueue {
+	my $ok = eval {
+		require IO::KQueue;
+		IO::KQueue->import(qw(
+		    EVFILT_VNODE EV_ADD EV_ENABLE EV_CLEAR
+		    NOTE_WRITE NOTE_DELETE NOTE_EXTEND NOTE_ATTRIB NOTE_RENAME NOTE_REVOKE
+		));
+		1;
+	} ? 1 : 0;
+	log_debug($ok ? "IO::KQueue loaded" : "IO::KQueue unavailable; polling fallback enabled");
+	return $ok;
+}
+
+sub wait_for_change {
+	if ($have_kqueue && $conf{LEASE_FILE} && -r $conf{LEASE_FILE}) {
+		if (wait_for_kqueue_change($conf{LEASE_FILE})) {
+			log_debug("kqueue reported lease file event");
+			return;
+		}
+		log_warn("kqueue watch unavailable; falling back to polling");
+	}
+
+	log_debug("polling sleep for ${interval}s");
+	sleep $interval;
+}
+
+sub wait_for_kqueue_change {
+	my ($path) = @_;
+	open my $fh, "<", $path or return 0;
+
+	my $kq = eval { IO::KQueue->new() };
+	if (!$kq) {
+		close $fh;
+		return 0;
+	}
+
+	my $flags = &EV_ADD | &EV_ENABLE | &EV_CLEAR;
+	my $notes = &NOTE_WRITE | &NOTE_DELETE | &NOTE_EXTEND | &NOTE_ATTRIB | &NOTE_RENAME | &NOTE_REVOKE;
+	my $ok = eval {
+		$kq->EV_SET(fileno($fh), &EVFILT_VNODE, $flags, $notes, 0, 0);
+		$kq->kevent($interval * 1000);
+		1;
+	} ? 1 : 0;
+	POSIX::close($$kq);
+	close $fh;
+
+	return $ok;
+}
+
+sub lease_snapshot {
+	my %lease;
+
+	if ($conf{LEASE_FILE} && -r $conf{LEASE_FILE}) {
+		log_debug("reading lease file $conf{LEASE_FILE}");
+		%lease = parse_lease_text(read_file($conf{LEASE_FILE}));
+	}
+
+	if (!complete_lease(\%lease)) {
+		my $lease_if = $conf{LEASE_IF} || $conf{WAN_IF};
+		if ($lease_if) {
+			log_debug("reading dhcp6leasectl for $lease_if");
+			my %cmd_lease = parse_lease_text(read_cmd($dhcp6leasectl, "-l", $lease_if));
+			for my $key (keys %cmd_lease) {
+				$lease{$key} = $cmd_lease{$key}
+				    unless exists $lease{$key} && defined $lease{$key} && $lease{$key} ne "";
+			}
+		}
+	}
+
+	return join "\n", map { "$_=$lease{$_}" } grep { exists $lease{$_} } qw(
+	    PD_PREFIX BR_IPV6 MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN
+	    MAP_IPV6_PREFIX MAP_IPV6_PLEN PSID_OFFSET DHCP_PSID_LEN DHCP_PSID
+	);
+}
+
+sub parse_lease_text {
+	my ($text) = @_;
+	my %lease;
+
+	for my $line (split /\n/, $text) {
+		$line =~ s/^\s+//;
+		$line =~ s/\s+$//;
+		next if $line eq "";
+
+		if ($line =~ /^ia_pd\s+\d+\s+([0-9a-fA-F:]+)\s+(\d{1,3})\b/ ||
+		    $line =~ /^IA_PD\s+\d+:\s+([0-9a-fA-F:]+)\/(\d{1,3})\b/) {
+			$lease{PD_PREFIX} = "$1/$2";
+			next;
+		}
+		if ($line =~ /^mape_br\s+([0-9a-fA-F:]+)\b/i ||
+		    $line =~ /^BR:\s+([0-9a-fA-F:]+)\b/i) {
+			$lease{BR_IPV6} = $1;
+			next;
+		}
+		if ($line =~ /^mape_rule\s+(\d+)\s+(\d+)\s+([0-9.]+)\s+(\d+)\s+([0-9a-fA-F:]+)\s+(\d+)\b/i ||
+		    $line =~ /^rule:\s+flags\s+(\d+)\s+ea-len\s+(\d+)\s+([0-9.]+)\/(\d+)\s+([0-9a-fA-F:]+)\/(\d+)\b/i) {
+			@lease{qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)} =
+			    ($1, $2, $3, $4, $5, $6);
+			next;
+		}
+		if ($line =~ /^mape_portparams\s+(\d+)\s+(\d+)\s+(\d+)\b/i ||
+		    $line =~ /^portparams:\s+offset\s+(\d+)\s+psid-len\s+(\d+)\s+psid\s+(\d+)\b/i) {
+			@lease{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)} = ($1, $2, $3);
+			next;
+		}
+	}
+
+	return %lease;
+}
+
+sub complete_snapshot {
+	my ($snapshot) = @_;
+	my %lease = map { split /=/, $_, 2 } grep { $_ ne "" } split /\n/, $snapshot;
+	return complete_lease(\%lease);
+}
+
+sub complete_lease {
+	my ($lease) = @_;
+	for my $key (qw(PD_PREFIX BR_IPV6 EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)) {
+		return 0 unless exists $lease->{$key} && defined $lease->{$key} && $lease->{$key} ne "";
+	}
+	return 1;
+}
+
+sub read_file {
+	my ($path) = @_;
+	open my $fh, "<", $path or return "";
+	local $/;
+	return <$fh>;
+}
+
+sub read_cmd {
+	my (@cmd) = @_;
+	open my $fh, "-|", @cmd or return "";
+	local $/;
+	my $out = <$fh>;
+	close $fh;
+	return $out // "";
+}
+
+sub run_command {
+	my (@cmd) = @_;
+	my $pid = open my $fh, "-|";
+	if (!defined $pid) {
+		return (-1, "cannot fork: $!");
+	}
+	if ($pid == 0) {
+		open STDERR, ">&", STDOUT or exit 127;
+		exec @cmd or do {
+			print "cannot exec $cmd[0]: $!\n";
+			exit 127;
+		};
+	}
+
+	local $/;
+	my $out = <$fh> // "";
+	close $fh;
+	return ($?, $out);
+}
+
+sub read_state {
+	return undef unless -r $state_file;
+	return read_file($state_file);
+}
+
+sub write_state {
+	my ($snapshot) = @_;
+	my $tmp = "$state_file.$$";
+	open my $fh, ">", $tmp or die "maped: cannot write $tmp: $!\n";
+	print {$fh} $snapshot;
+	close $fh or die "maped: cannot close $tmp: $!\n";
+	rename $tmp, $state_file or die "maped: cannot rename $tmp to $state_file: $!\n";
+}
+
+sub log_debug {
+	my ($msg) = @_;
+	log_msg("debug", LOG_DEBUG, $msg);
+}
+
+sub log_info {
+	my ($msg) = @_;
+	log_msg("info", LOG_INFO, $msg);
+}
+
+sub log_warn {
+	my ($msg) = @_;
+	log_msg("warn", LOG_WARNING, $msg);
+}
+
+sub log_msg {
+	my ($level, $prio, $msg) = @_;
+	return if $log_rank{$level} < $log_rank{$log_level};
+	syslog($prio, "%s", $msg);
+	print strftime("%Y-%m-%d %H:%M:%S", localtime) . " [$level] $msg\n"
+	    unless $daemon;
+}

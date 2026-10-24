@@ -1,0 +1,253 @@
+#!/usr/bin/perl
+#
+# Copyright (c) 2026 Panagiotis Atmatzidis <atma@convalesco.org>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+use strict;
+use warnings;
+use Socket qw(AF_INET AF_INET6 inet_pton inet_ntop);
+use Math::BigInt;
+
+sub diex { die "maped-derive: @_\n"; }
+
+sub trim {
+	my ($s) = @_;
+	$s //= "";
+	$s =~ s/^\s+//;
+	$s =~ s/\s+$//;
+	return $s;
+}
+
+sub pow2 {
+	my ($bits) = @_;
+	return Math::BigInt->bone()->blsft($bits);
+}
+
+sub bytes_to_int {
+	my ($bytes) = @_;
+	my $n = Math::BigInt->new(0);
+	for my $b (unpack("C*", $bytes)) {
+		$n->blsft(8);
+		$n->badd($b);
+	}
+	return $n;
+}
+
+sub int_to_ipv6 {
+	my ($n) = @_;
+	my @b;
+	my $x = $n->copy();
+	for (1..16) {
+		unshift @b, $x->copy()->band(255)->numify();
+		$x->brsft(8);
+	}
+	return inet_ntop(AF_INET6, pack("C*", @b));
+}
+
+sub ipv6_to_int {
+	my ($addr) = @_;
+	my $packed = inet_pton(AF_INET6, $addr) or diex("invalid IPv6 address: $addr");
+	return bytes_to_int($packed);
+}
+
+sub ipv4_to_int {
+	my ($addr) = @_;
+	my $packed = inet_pton(AF_INET, $addr) or diex("invalid IPv4 address: $addr");
+	return unpack("N", $packed);
+}
+
+sub int_to_ipv4 {
+	my ($n) = @_;
+	return inet_ntop(AF_INET, pack("N", $n));
+}
+
+sub mask_bits {
+	my ($bits, $width) = @_;
+	return Math::BigInt->new(0) if $bits == 0;
+	return (pow2($width)->bsub(1))->bxor(pow2($width - $bits)->bsub(1));
+}
+
+sub network_int {
+	my ($n, $plen, $width) = @_;
+	return $n->copy()->band(mask_bits($plen, $width));
+}
+
+sub find_pd_prefix {
+	my ($lease) = @_;
+	return $ENV{PD_PREFIX} if $ENV{PD_PREFIX};
+	return $lease->{PD_PREFIX} if $lease->{PD_PREFIX};
+
+	if ($ENV{LEASE_FILE} && -r $ENV{LEASE_FILE}) {
+		open my $fh, "<", $ENV{LEASE_FILE} or diex("cannot read $ENV{LEASE_FILE}: $!");
+		while (my $line = <$fh>) {
+			if ($line =~ /^\s*ia_pd\s+\d+\s+([0-9a-fA-F:]+)\s+(\d{1,3})\b/) {
+				return "$1/$2";
+			}
+			if ($line =~ /^\s*IA_PD\s+\d+:\s+([0-9a-fA-F:]+)\/(\d{1,3})\b/) {
+				return "$1/$2";
+			}
+		}
+	}
+
+	if ($ENV{PD_IF}) {
+		open my $fh, "-|", "ifconfig", $ENV{PD_IF} or diex("cannot run ifconfig $ENV{PD_IF}: $!");
+		while (my $line = <$fh>) {
+			if ($line =~ /\binet6\s+([0-9a-fA-F:]+)\s+prefixlen\s+(\d+)/) {
+				my ($addr, $plen) = ($1, $2);
+				next if $addr =~ /^fe80:/i;
+				next if $addr =~ /^fd/i;
+				return "$addr/$plen";
+			}
+		}
+	}
+
+	diex("could not find delegated prefix; set PD_PREFIX=.../... in /etc/maped.conf for testing");
+}
+
+sub parse_dhcp6leased_text {
+	my ($text) = @_;
+	my %lease;
+
+	for my $line (split /\n/, $text) {
+		$line = trim($line);
+		next if $line eq "";
+
+		if ($line =~ /^ia_pd\s+\d+\s+([0-9a-fA-F:]+)\s+(\d{1,3})\b/) {
+			$lease{PD_PREFIX} = "$1/$2";
+			next;
+		}
+		if ($line =~ /^IA_PD\s+\d+:\s+([0-9a-fA-F:]+)\/(\d{1,3})\b/) {
+			$lease{PD_PREFIX} = "$1/$2";
+			next;
+		}
+		if ($line =~ /^mape_br\s+([0-9a-fA-F:]+)\b/i || $line =~ /^BR:\s+([0-9a-fA-F:]+)\b/i) {
+			$lease{BR_IPV6} = $1;
+			next;
+		}
+		if ($line =~ /^mape_rule\s+(\d+)\s+(\d+)\s+([0-9.]+)\s+(\d+)\s+([0-9a-fA-F:]+)\s+(\d+)\b/i) {
+			@lease{qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)} =
+			    ($1, $2, $3, $4, $5, $6);
+			next;
+		}
+		if ($line =~ /^rule:\s+flags\s+(\d+)\s+ea-len\s+(\d+)\s+([0-9.]+)\/(\d+)\s+([0-9a-fA-F:]+)\/(\d+)\b/i) {
+			@lease{qw(MAP_RULE_FLAGS EA_LEN MAP_IPV4_PREFIX MAP_IPV4_PLEN MAP_IPV6_PREFIX MAP_IPV6_PLEN)} =
+			    ($1, $2, $3, $4, $5, $6);
+			next;
+		}
+		if ($line =~ /^mape_portparams\s+(\d+)\s+(\d+)\s+(\d+)\b/i) {
+			@lease{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)} = ($1, $2, $3);
+			next;
+		}
+		if ($line =~ /^portparams:\s+offset\s+(\d+)\s+psid-len\s+(\d+)\s+psid\s+(\d+)\b/i) {
+			@lease{qw(PSID_OFFSET DHCP_PSID_LEN DHCP_PSID)} = ($1, $2, $3);
+			next;
+		}
+	}
+
+	return %lease;
+}
+
+sub read_dhcp6leased {
+	my %lease;
+
+	if ($ENV{LEASE_FILE} && -r $ENV{LEASE_FILE}) {
+		open my $fh, "<", $ENV{LEASE_FILE} or diex("cannot read $ENV{LEASE_FILE}: $!");
+		local $/;
+		%lease = parse_dhcp6leased_text(<$fh>);
+	}
+
+	my $lease_if = $ENV{LEASE_IF} || $ENV{WAN_IF} || "";
+	return %lease if $lease_if eq "";
+	return %lease if $lease{PD_PREFIX} && $lease{BR_IPV6} &&
+	    $lease{MAP_IPV6_PREFIX} && $lease{MAP_IPV6_PLEN} &&
+	    $lease{MAP_IPV4_PREFIX} && $lease{MAP_IPV4_PLEN} &&
+	    $lease{EA_LEN} && $lease{PSID_OFFSET} &&
+	    exists $lease{DHCP_PSID_LEN} && exists $lease{DHCP_PSID};
+
+	my $cmd = $ENV{DHCP6LEASECTL} || "dhcp6leasectl";
+	if (open my $fh, "-|", $cmd, "-l", $lease_if) {
+		local $/;
+		my %cmd_lease = parse_dhcp6leased_text(<$fh>);
+		for my $key (keys %cmd_lease) {
+			$lease{$key} = $cmd_lease{$key}
+			    unless exists $lease{$key} && defined $lease{$key} && $lease{$key} ne "";
+		}
+		close $fh;
+	}
+
+	return %lease;
+}
+
+sub value_for {
+	my ($lease, $key, $missing) = @_;
+	return $lease->{$key} if exists $lease->{$key} && defined $lease->{$key} && $lease->{$key} ne "";
+	return $ENV{$key} if exists $ENV{$key} && defined $ENV{$key} && $ENV{$key} ne "";
+	diex("$missing missing");
+}
+
+my %lease = read_dhcp6leased();
+my $pd = find_pd_prefix(\%lease);
+my ($pd_addr, $pd_plen) = $pd =~ /^([^\/]+)\/(\d+)$/ or diex("bad PD prefix: $pd");
+
+my $map6_prefix = value_for(\%lease, "MAP_IPV6_PREFIX", "MAP_IPV6_PREFIX");
+my $map6_plen   = value_for(\%lease, "MAP_IPV6_PLEN", "MAP_IPV6_PLEN");
+my $map4_prefix = value_for(\%lease, "MAP_IPV4_PREFIX", "MAP_IPV4_PREFIX");
+my $map4_plen   = value_for(\%lease, "MAP_IPV4_PLEN", "MAP_IPV4_PLEN");
+my $ea_len      = value_for(\%lease, "EA_LEN", "EA_LEN");
+my $psid_offset = value_for(\%lease, "PSID_OFFSET", "PSID_OFFSET");
+my $br_ipv6     = $lease{BR_IPV6} // $ENV{BR_IPV6};
+
+my $pd_int = network_int(ipv6_to_int($pd_addr), $pd_plen, 128);
+my $rule6_int = network_int(ipv6_to_int($map6_prefix), $map6_plen, 128);
+
+if ($pd_int->copy()->band(mask_bits($map6_plen, 128))->bcmp($rule6_int) != 0) {
+	diex("delegated prefix $pd is not inside MAP rule $map6_prefix/$map6_plen");
+}
+
+my $v4_suffix_len = 32 - $map4_plen;
+my $psid_len = $ea_len - $v4_suffix_len;
+diex("invalid MAP rule: EA_LEN too small") if $psid_len < 0;
+
+my $shift = 128 - $map6_plen - $ea_len;
+my $ea = $pd_int->copy()->brsft($shift)->band(pow2($ea_len)->bsub(1));
+
+my $v4_suffix = $ea->copy()->brsft($psid_len)->numify();
+my $psid = $ea->copy()->band(pow2($psid_len)->bsub(1))->numify();
+
+my $nat_psid_len = (exists $lease{DHCP_PSID_LEN} && $lease{DHCP_PSID_LEN} > 0) ?
+    $lease{DHCP_PSID_LEN} : $psid_len;
+my $nat_psid = (exists $lease{DHCP_PSID_LEN} && $lease{DHCP_PSID_LEN} > 0 &&
+    exists $lease{DHCP_PSID}) ? $lease{DHCP_PSID} : $psid;
+
+my $map4 = ipv4_to_int($map4_prefix) | $v4_suffix;
+my $map4_addr = int_to_ipv4($map4);
+
+my $prefix64 = network_int($pd_int, 64, 128);
+my $ce_int = $prefix64->copy()->bior(Math::BigInt->new($map4)->blsft(16))->bior($psid);
+my $ce_ipv6 = int_to_ipv6($ce_int);
+
+print "PD_PREFIX='$pd'\n";
+print "BR_IPV6='$br_ipv6'\n" if defined $br_ipv6 && $br_ipv6 ne "";
+print "MAP_IPV6_PREFIX='$map6_prefix'\n";
+print "MAP_IPV6_PLEN='$map6_plen'\n";
+print "MAP_IPV4_PREFIX='$map4_prefix'\n";
+print "MAP_IPV4_PLEN='$map4_plen'\n";
+print "EA_LEN='$ea_len'\n";
+print "CE_IPV6='$ce_ipv6'\n";
+print "MAPE_IPV4='$map4_addr'\n";
+print "EA_PSID_LEN='$psid_len'\n";
+print "EA_PSID='$psid'\n";
+print "PSID_LEN='$nat_psid_len'\n";
+print "PSID='$nat_psid'\n";
+print "PSID_OFFSET='$psid_offset'\n";

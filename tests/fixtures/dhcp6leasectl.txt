@@ -1,0 +1,7 @@
+pppoe0 [Bound]
+        IA_PD 0: 2001:db8:100:4200::/56
+        lease 7 days
+        MAP-E
+                BR: 2001:db8:ffff::1
+                rule: flags 0 ea-len 16 192.0.2.0/24 2001:db8:100::/48
+                portparams: offset 6 psid-len 8 psid 42

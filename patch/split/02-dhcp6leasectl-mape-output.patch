@@ -1,0 +1,87 @@
+Index: usr.sbin/dhcp6leasectl/dhcp6leasectl.c
+===================================================================
+RCS file: /cvs/src/usr.sbin/dhcp6leasectl/dhcp6leasectl.c,v
+diff -u -p usr.sbin/dhcp6leasectl/dhcp6leasectl.c
+--- usr.sbin/dhcp6leasectl/dhcp6leasectl.c	Fri May 15 12:26:12 2026
++++ usr.sbin/dhcp6leasectl/dhcp6leasectl.c	Fri May 15 12:26:13 2026
+@@ -48,6 +48,7 @@
+ 
+ __dead void	 usage(void);
+ void		 show_interface_msg(struct ctl_engine_info *);
++void		 show_mape_msg(struct s46_mape *);
+ 
+ struct imsgbuf	*ibuf;
+ 
+@@ -234,5 +235,56 @@ show_interface_msg(struct ctl_engine_info *cei)
+ 		} else
+ 			printf("\tlease %lld second%s\n", s, s > 1 ? "s" : "");
+ 
++	}
++
++	show_mape_msg(&cei->mape);
++}
++
++void
++show_mape_msg(struct s46_mape *mape)
++{
++	char	 brbuf[INET6_ADDRSTRLEN], prefix4buf[INET_ADDRSTRLEN];
++	char	 prefix6buf[INET6_ADDRSTRLEN];
++	size_t	 i, rule_count;
++
++	if (!mape->valid)
++		return;
++
++	printf("\tMAP-E\n");
++
++	if (mape->br_valid) {
++		if (inet_ntop(AF_INET6, &mape->br, brbuf, sizeof(brbuf)) ==
++		    NULL)
++			strlcpy(brbuf, "invalid", sizeof(brbuf));
++		printf("\t\tBR: %s\n", brbuf);
++	}
++
++	rule_count = mape->rule_count;
++	if (rule_count > MAX_S46_RULES)
++		rule_count = MAX_S46_RULES;
++
++	for (i = 0; i < rule_count; i++) {
++		if (!mape->rules[i].valid)
++			continue;
++
++		if (inet_ntop(AF_INET, &mape->rules[i].prefix4, prefix4buf,
++		    sizeof(prefix4buf)) == NULL)
++			strlcpy(prefix4buf, "invalid", sizeof(prefix4buf));
++		if (inet_ntop(AF_INET6, &mape->rules[i].prefix6, prefix6buf,
++		    sizeof(prefix6buf)) == NULL)
++			strlcpy(prefix6buf, "invalid", sizeof(prefix6buf));
++
++		printf("\t\trule: flags %u ea-len %u %s/%u %s/%u\n",
++		    mape->rules[i].flags, mape->rules[i].ea_len, prefix4buf,
++		    mape->rules[i].prefix4_len, prefix6buf,
++		    mape->rules[i].prefix6_len);
++
++		if (!mape->rules[i].portparams.valid)
++			continue;
++
++		printf("\t\tportparams: offset %u psid-len %u psid %u\n",
++		    mape->rules[i].portparams.offset,
++		    mape->rules[i].portparams.psid_len,
++		    mape->rules[i].portparams.psid);
+ 	}
+ }
+Index: usr.sbin/dhcp6leasectl/dhcp6leasectl.8
+===================================================================
+RCS file: /cvs/src/usr.sbin/dhcp6leasectl/dhcp6leasectl.8,v
+diff -u -p usr.sbin/dhcp6leasectl/dhcp6leasectl.8
+--- usr.sbin/dhcp6leasectl/dhcp6leasectl.8	Fri May 15 12:26:12 2026
++++ usr.sbin/dhcp6leasectl/dhcp6leasectl.8	Fri May 15 12:26:13 2026
+@@ -41,6 +41,9 @@ The following options are available:
+ List the configured lease on
+ .Ar interface
+ instead of requesting a new lease.
++The output includes delegated prefixes and, when present, MAP-E
++Softwire46 parameters learned by
++.Xr dhcp6leased 8 .
+ .It Fl s Ar socket
+ Use
+ .Ar socket

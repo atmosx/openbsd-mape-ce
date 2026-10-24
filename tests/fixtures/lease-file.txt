@@ -1,0 +1,4 @@
+ia_pd 0 2001:db8:100:4200:: 56
+mape_br 2001:db8:ffff::1
+mape_rule 0 16 192.0.2.0 24 2001:db8:100:: 48
+mape_portparams 6 8 42

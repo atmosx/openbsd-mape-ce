@@ -1,0 +1,13 @@
+#!/bin/ksh
+#
+# OpenBSD rc.d script for maped.
+
+daemon="/usr/bin/perl"
+daemon_flags="/usr/local/sbin/maped -d"
+pexp="/usr/bin/perl /usr/local/sbin/maped -d"
+
+. /etc/rc.d/rc.subr
+
+rc_reload=NO
+
+rc_cmd $1
