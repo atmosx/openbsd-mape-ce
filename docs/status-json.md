@@ -68,6 +68,9 @@ Top-level fields:
 - `allocation`: current applied address/PSID tuple, or null.
 - `port_set`: complete inclusive port ranges and counts, or null.
 - `record`: ordered persistent array of observed allocation periods.
+- `published_endpoints`: current successfully applied inbound endpoints, or `[]`.
+- `publish_events`: ordered persistent endpoint-change events (older version-1
+  files without these additive fields are accepted).
 
 An allocation contains:
 
@@ -100,6 +103,30 @@ that every port (including port zero) is usable by normal applications.
 Port allocation never implies a PF pass rule, an SSH listener, a redirect, or
 ISP permission for inbound traffic. ICMP echo identifiers use the same mapping
 arithmetic but are not TCP/UDP service ports.
+
+## Published inbound endpoints
+
+Enable optional publishing as described in [inbound publishing](inbound-publishing.md).
+Each `published_endpoints` entry contains `name`, `protocol`, `external_address`,
+`external_port`, `target_address`, `target_port`, and optional `source_table`.
+See the [example endpoint array](../examples/maped-published-endpoints.json),
+derived from [the service file](../examples/maped-publish.json) for allocation
+`192.0.2.66`, offset 6, PSID length 8, PSID 42. The example array is not an
+entire status document and is never an authorization source.
+
+`published_endpoints` is empty while initializing/applying and on inactive/error
+status; degraded status can retain the last applied endpoints until expiry.
+A successful application or healthy confirmation can advertise endpoints.
+Neither assignment alone nor an unsuccessful PF load does so.
+
+Each `publish_events` entry contains `at` (UTC observation timestamp), `status`,
+and `endpoints` (the complete endpoint list). Changes to ports, addresses,
+targets or source tables produce events. An empty list records withdrawal or
+loss of confirmed configuration; check status/reason for failures, as it does
+not prove kernel cleanup. Initializing/applying transitions do not commit events.
+Healthy unchanged renewals add no events. Events survive restart and are not
+automatically pruned. The latest nonempty event supplies allocation preferences
+only: all ports are rechecked against the current live lease before use.
 
 ## History semantics
 
@@ -189,10 +216,11 @@ withdrawal, failed application, transient query failures, and expiry.
 Run `make test` and, for strict TAP failure checking:
 
 ```sh
-prove tests/maped-status.t tests/maped-daemon.t
+prove tests/maped-publish.t tests/maped-status.t tests/maped-daemon.t
 ```
 
-Install the new `MapedStatus.pm` alongside `Maped.pm` using `make install-bin`,
+Install all helpers and modules, including `MapedStatus.pm` and `MapedPublish.pm`,
+using `make install-bin`,
 and restart `maped` to enable reporting. No PF or DHCP patch change is needed.
 Validate the new module on OpenBSD as well: local mock tests are not proof that
 the target's pledge/unveil execution and packet path have been exercised.

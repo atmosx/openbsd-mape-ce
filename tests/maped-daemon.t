@@ -27,6 +27,7 @@ $n = ($code =~ s/\$state_stat\[4\] != 0/\$state_stat[4] != \$>/);
 is($n, 1, 'test state directory owned by test UID');
 writefile("$tmp/maped", $code);
 copy("$repo/maped/Maped.pm", "$tmp/Maped.pm") or die $!;
+copy("$repo/maped/MapedPublish.pm", "$tmp/MapedPublish.pm") or die $!;
 copy("$repo/maped/MapedStatus.pm", "$tmp/MapedStatus.pm") or die $!;
 mkdir "$tmp/state";
 my $live = readfile("$repo/tests/fixtures/dhcp6leasectl.txt");
@@ -35,10 +36,10 @@ writefile("$tmp/live", $live);
 for my $name (qw(ctl up down ifconfig pfctl route)) {
 	my $body = {
 	    ctl => "[ ! -f '$tmp/fail' ] || exit 1\ncat '$tmp/live'\n",
-	    up => "echo up >> '$tmp/calls'\ntest -s \"\$2\"\n. \"\$1\"\necho \"\$GIF_MTU\" > '$tmp/gif_mtu'\ntouch '$tmp/installed'\n",
+	    up => "echo up >> '$tmp/calls'\ntest -s \"\$2\"\n. \"\$1\"\necho \"\$GIF_MTU\" > '$tmp/gif_mtu'\ntouch '$tmp/installed'\n'$repo/maped/maped-publish' \"\$1\" > '$tmp/publish-rules'\n",
 	    down => "echo down >> '$tmp/calls'\nrm -f '$tmp/installed'\n",
 	    ifconfig => "case \"\$1\" in\npppoe0) echo \"pppoe0: flags=UP mtu \$(cat '$tmp/wan_mtu')\"; [ ! -f '$tmp/installed' ] || echo ' inet6 2001:db8:100:4200:0:c000:242:2a -->  prefixlen 128';;\n*) echo \"gif0: flags=<UP> mtu \$(cat '$tmp/gif_mtu')\"; echo ' tunnel: inet6 2001:db8:100:4200:0:c000:242:2a --> 2001:db8:ffff::1 ttl 64'; echo ' inet 192.0.2.66 --> 0.0.0.1 netmask 0xffffffff';;\nesac\n",
-	    pfctl => "echo 'match out on gif0 inet from any to any nat-to (gif0) map-e-portset 6/8/42'\necho \"match out on gif0 inet proto tcp flags S/SA scrub (max-mss \$((\$(cat '$tmp/gif_mtu') - 40)))\"\n",
+	    pfctl => "echo 'match out on gif0 inet from any to any nat-to (gif0) map-e-portset 6/8/42'\necho \"match out on gif0 inet proto tcp flags S/SA scrub (max-mss \$((\$(cat '$tmp/gif_mtu') - 40)))\"\n[ ! -f '$tmp/publish-rules' ] || cat '$tmp/publish-rules'\n",
 	    route => "echo ' interface: gif0'\necho ' gateway: 0.0.0.1'\n",
 	}->{$name};
 	writefile("$tmp/$name", "#!/bin/sh\n$body"); chmod 0755, "$tmp/$name";
@@ -96,6 +97,54 @@ writefile("$tmp/live", $live);
 is($rc, 0, 'original PSID restored') or diag $out;
 is(status()->{port_set}{psid}, 42, 'restored allocation is current');
 is(scalar @{status()->{record}}, 3, 'return to old provisioning recorded');
+# Publishing is startup configuration; preferences survive daemon restarts.
+$conf{MAPED_PUBLISH_FILE} = "$tmp/services.json";
+writefile("$tmp/services.json", JSON::PP::encode_json({services => [
+    {name => 'web', protocol => 'tcp', target_address => '127.0.0.1', target_port => 8080, source_table => 'trusted'}]}));
+writefile("$tmp/conf", config_text(\%conf));
+($rc, $out) = once();
+is($rc, 0, 'publishing candidate applied') or diag $out;
+is(status()->{published_endpoints}[0]{external_port}, 1192, 'only permitted external port advertised');
+like(readfile("$tmp/publish-rules"), qr/from <trusted>.*rdr-to 127.0.0.1 port 8080/, 'source restriction rendered');
+is(scalar @{status()->{publish_events}}, 1, 'successful publication recorded');
+writefile("$tmp/calls", '');
+# Real pfctl adds an equality operator and moves label before rdr-to.
+my $printed = readfile("$tmp/publish-rules");
+$printed =~ s/port 1192/port = 1192/;
+$printed =~ s/ rdr-to (.*?) label (.*)/ flags S\/SA keep state label $2 rdr-to $1/;
+writefile("$tmp/publish-rules", $printed);
+($rc, $out) = once();
+is($rc, 0, 'published restart with healthy PF succeeds') or diag $out;
+is(readfile("$tmp/calls"), '', 'healthy published renewal does not reload PF');
+is(scalar @{status()->{publish_events}}, 1, 'healthy renewal does not add change events');
+writefile("$tmp/publish-rules", '');
+($rc, $out) = once();
+is($rc, 0, 'missing published rule repaired') or diag $out;
+is(readfile("$tmp/calls"), "up\n", 'runtime drift triggers apply');
+writefile("$tmp/live", $changed);
+($rc, $out) = once();
+is($rc, 0, 'published allocation changed') or diag $out;
+is(status()->{published_endpoints}[0]{external_port}, 1196, 'old assignment cannot authorize stale port');
+is(scalar @{status()->{publish_events}}, 3, 'withdrawal and replacement recorded');
+writefile("$tmp/live", $live);
+($rc, $out) = once();
+is($rc, 0, 'publishing restored') or diag $out;
+my $services_json = readfile("$tmp/services.json");
+writefile("$tmp/services.json", '{invalid');
+writefile("$tmp/calls", '');
+($rc, $out) = once();
+ok($rc != 0, 'malformed configured service file rejects startup');
+is(readfile("$tmp/calls"), '', 'invalid file does not fall back to unrestricted rules');
+writefile("$tmp/services.json", JSON::PP::encode_json({services => [map {
+    +{name => "service$_", protocol => 'tcp', target_address => '127.0.0.1', target_port => 80}
+} 1..253]}));
+($rc, $out) = once();
+ok($rc != 0, 'insufficient ports rejects complete publishing candidate');
+is(readfile("$tmp/calls"), "down\n", 'exhaustion retires old rules without partial apply');
+is_deeply(status()->{published_endpoints}, [], 'exhausted candidate not advertised');
+writefile("$tmp/services.json", $services_json);
+($rc, $out) = once();
+is($rc, 0, 'valid service file recovers after exhaustion') or diag $out;
 writefile("$tmp/calls", "up\n");
 writefile("$tmp/live", "pppoe0 [Init]\n");
 ($rc, $out) = once();
@@ -104,7 +153,9 @@ is(readfile("$tmp/calls"), "up\ndown\n", 'withdrawal invokes down helper');
 ok(!-f "$tmp/state/applied.conf", 'ownership removed after cleanup');
 is(status()->{status}, 'inactive', 'withdrawal clears active status');
 ok(!defined status()->{port_set}, 'withdrawal clears usable ports');
-is(scalar @{status()->{record}}, 3, 'history survives renewals and withdrawal');
+is(scalar @{status()->{record}}, 5, 'history survives renewals and withdrawal');
+is_deeply(status()->{published_endpoints}, [], 'withdrawal clears published endpoints');
+is_deeply(status()->{publish_events}[-1]{endpoints}, [], 'withdrawal persists a publishing event');
 writefile("$tmp/live", $live);
 ($rc, $out) = once();
 is($rc, 0, 'new live lease reapplied') or diag $out;
@@ -118,6 +169,7 @@ writefile("$tmp/up", "#!/bin/sh\nexit 3\n");
 ok($rc != 0, 'failed apply returns failure');
 ok(!-f "$tmp/state/applied.conf", 'partial apply retired');
 isnt(status()->{status}, 'active', 'failed apply never advertised active');
+is_deeply(status()->{published_endpoints}, [], 'failed candidate not advertised');
 
 writefile("$tmp/up", "#!/bin/sh\necho up >> '$tmp/calls'\n");
 writefile("$tmp/calls", '');

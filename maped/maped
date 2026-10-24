@@ -21,6 +21,7 @@ use FindBin;
 use lib "$FindBin::Bin", "$FindBin::Bin/../libexec/maped";
 use Maped qw(command status_text parse_lease complete_lease lease_text parse_config config_text live_lease effective_mtu has_ipv6 runtime_mismatch);
 use MapedStatus;
+use MapedPublish;
 use Fcntl qw(:flock);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
 use File::Temp qw(tempfile);
@@ -51,6 +52,9 @@ if ($> != 0) {
 }
 
 my %conf = read_conf($conf);
+my $publish_services = MapedPublish::load($conf{MAPED_PUBLISH_FILE});
+# Internal candidate data can only come from a confirmed allocation.
+delete $conf{MAPED_PUBLISH_JSON};
 my $state_dir = $conf{MAPED_STATE_DIR} || $conf{MAPE_STATE_DIR} || "/var/db/maped";
 my $state_file = $conf{MAPED_STATE_FILE} || $conf{MAPE_STATE_FILE} || "$state_dir/lease.state";
 my $maped_up = resolve_command($conf{MAPED_UP} || "/usr/local/libexec/maped/maped-up",
@@ -248,8 +252,7 @@ sub withdraw {
 	$report_plan = undef;
 	$last_active_plan = undef;
 	($report_status, $report_reason) = ('inactive', $reason);
-	publish_status();
-	return 1 unless -e $applied_file;
+	return publish_status() unless -e $applied_file;
 	log_info("withdrawing MAP-E: $reason");
 	my ($rc, $out) = command(30, 1024 * 1024, $maped_down, $applied_file);
 	if ($rc) {
@@ -260,7 +263,7 @@ sub withdraw {
 	}
 	unlink $state_file if -e $state_file;
 	unlink $applied_file or die "maped: remove ownership record: $!";
-	return 1;
+	return publish_status();
 }
 
 sub cycle {
@@ -329,10 +332,20 @@ sub run_once {
 	if ($@ || !defined $derived{CE_IPV6} || !defined $derived{MAPE_IPV4}) {
 		unlink $path;
 		log_warn('invalid derivation output');
+		withdraw('new provisioning cannot be derived');
 		return 0;
 	}
 	my %plan = (%conf, %derived);
 	my %previous = -e $applied_file ? read_conf($applied_file) : ();
+	my $assigned = eval { MapedPublish::assign($publish_services, \%plan,
+	    $reporter->publish_preferences()) };
+	if ($@) {
+		unlink $path;
+		log_warn("publishing rejected: $@");
+		withdraw('publishing candidate cannot be assigned');
+		return 0;
+	}
+	$plan{MAPED_PUBLISH_JSON} = MapedPublish::encode($assigned);
 	# Retire old ownership before changing a prefix, BR, or interface.
 	if (%previous && grep { ($previous{$_} // '') ne ($plan{$_} // '') }
 	    qw(CE_IPV6 BR_IPV6 MAPE_IPV4 WAN_IF GIF_IF PSID_OFFSET PSID_LEN PSID)) {
@@ -397,7 +410,20 @@ sub runtime_reconfigure_reason {
 	my ($route_rc, $routing) = run_command($route, '-n', 'get', '-inet', 'default');
 	return "cannot run route: $routing" if $route_rc == -1;
 	$routing = '' if $route_rc;
-	return runtime_mismatch($plan, $ifconfig_out, $wan, $rules, $routing);
+	my $mismatch = runtime_mismatch($plan, $ifconfig_out, $wan, $rules, $routing);
+	return $mismatch if defined $mismatch;
+	my @expected = split /\n/, MapedPublish::rules($plan);
+	my @actual = grep { /label "maped-publish-/ } split /\n/, $rules;
+	s/ port = / port /g for @actual;
+	return 'published PF rules differ' unless @actual == @expected;
+	for my $expected (@expected) {
+		# pfctl may insert flags/state defaults; require the endpoint and label.
+		my ($match, $redirect, $label) = $expected =~ /^(.*?) rdr-to (.*?) label (.*)$/;
+		return 'published PF rules differ' unless grep {
+		    /^\Q$match\E(?:\s|$)/ && /\brdr-to \Q$redirect\E(?:\s|$)/ &&
+		    index($_, "label $label") >= 0 } @actual;
+	}
+	return undef;
 }
 
 sub load_kqueue {

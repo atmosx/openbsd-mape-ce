@@ -1,0 +1,17 @@
+{
+  "services": [
+    {
+      "name": "admin-ssh",
+      "protocol": "tcp",
+      "target_address": "127.0.0.1",
+      "target_port": 22,
+      "source_table": "admin4"
+    },
+    {
+      "name": "web",
+      "protocol": "tcp",
+      "target_address": "127.0.0.1",
+      "target_port": 8080
+    }
+  ]
+}

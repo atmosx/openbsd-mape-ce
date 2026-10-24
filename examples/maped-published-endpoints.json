@@ -1,0 +1,19 @@
+[
+   {
+      "external_address" : "192.0.2.66",
+      "external_port" : 1192,
+      "name" : "admin-ssh",
+      "protocol" : "tcp",
+      "source_table" : "admin4",
+      "target_address" : "127.0.0.1",
+      "target_port" : 22
+   },
+   {
+      "external_address" : "192.0.2.66",
+      "external_port" : 1193,
+      "name" : "web",
+      "protocol" : "tcp",
+      "target_address" : "127.0.0.1",
+      "target_port" : 8080
+   }
+]

@@ -1,0 +1,14 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use FindBin;
+use lib "$FindBin::Bin";
+use Maped qw(parse_config);
+use MapedPublish;
+@ARGV == 1 or die "usage: maped-publish applied-config\n";
+open my $fh, '<', $ARGV[0] or die "maped-publish: $!\n";
+local $/;
+my %plan = parse_config(<$fh>);
+die "publishing requires a confirmed candidate from maped\n" if
+    $plan{MAPED_PUBLISH_FILE} && !exists $plan{MAPED_PUBLISH_JSON};
+print MapedPublish::rules(\%plan);

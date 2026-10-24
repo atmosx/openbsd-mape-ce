@@ -8,7 +8,7 @@ use File::Temp qw(tempfile);
 
 sub new {
 	my ($class, $path) = @_;
-	my $self = bless {path => $path, record => []}, $class;
+	my $self = bless {path => $path, record => [], publish_events => [], published => []}, $class;
 	if (-e $path) {
 		open my $fh, '<', $path or die "status open: $!";
 		local $/;
@@ -23,8 +23,23 @@ sub new {
 			    defined $r->{'last-seen'};
 		}
 		$self->{record} = $old->{record};
+		$self->{publish_events} = $old->{publish_events} || [];
+		die "invalid publishing history\n" unless ref($self->{publish_events}) eq 'ARRAY';
+		for my $event (@{$self->{publish_events}}) {
+			die "invalid publishing event\n" unless ref($event) eq 'HASH' && ref($event->{endpoints}) eq 'ARRAY';
+		}
+		$self->{published} = $self->{publish_events}[-1]{endpoints} if @{$self->{publish_events}};
 	}
 	return $self;
+}
+
+# Preferences survive withdrawal, but the allocator must recheck authorization.
+sub publish_preferences {
+	my ($self) = @_;
+	for my $event (reverse @{$self->{publish_events}}) {
+		return $event->{endpoints} if @{$event->{endpoints}};
+	}
+	return [];
 }
 
 sub stamp { return strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($_[0])); }
@@ -89,6 +104,16 @@ sub publish {
 		}
 	}
 	$doc->{record} = $records;
+	my $endpoints = $args{plan} ? JSON::PP::decode_json($args{plan}{MAPED_PUBLISH_JSON} || '[]') : [];
+	$doc->{published_endpoints} = $endpoints;
+	my @events = @{$self->{publish_events}};
+	my $published = $self->{published};
+	if ($args{status} !~ /^(?:initializing|applying)$/ &&
+	    $json->encode($published) ne $json->encode($endpoints)) {
+		push @events, {at => stamp($now), status => $args{status}, endpoints => $endpoints};
+		$published = $endpoints;
+	}
+	$doc->{publish_events} = \@events;
 	(my $dir = $self->{path}) =~ s{/[^/]+$}{};
 	my ($fh, $tmp) = tempfile('status.XXXXXXXX', DIR => $dir);
 	my $ok = eval {
@@ -99,6 +124,8 @@ sub publish {
 	};
 	if (!$ok) { my $err = $@; close $fh; unlink $tmp; die $err; }
 	$self->{record} = $records;
+	$self->{publish_events} = \@events;
+	$self->{published} = $published;
 	return $doc;
 }
 1;
